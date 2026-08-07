@@ -1,0 +1,16 @@
+{
+  "language": [
+    "Hindi",
+    "Punjabi"
+  ],
+  "category": [
+    "Film",
+    "Tv show"
+  ],
+  "rating": [
+    "Must Watch",
+    "Good",
+    "Satisfactory",
+    "Passable"
+  ]
+}
