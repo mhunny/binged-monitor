@@ -84,18 +84,24 @@ def run_scraper():
     seen_titles = load_seen()
     items = []
 
-    print("Launching Chromium browser with Playwright...")
+    print("Launching Chromium via Playwright...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(BINGED_URL, wait_until="networkidle", timeout=30000)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        )
+        page = context.new_page()
         
-        # Wait for dynamic cards to populate
-        page.wait_for_timeout(3000)
+        # Navigate to Binged
+        response = page.goto(BINGED_URL, wait_until="domcontentloaded", timeout=30000)
+        print(f"Page Load Response Status: {response.status if response else 'No Response'}")
         
-        # Extract rendered text elements
-        title_elements = page.query_selector_all("a, h2, h3")
-        for elem in title_elements:
+        # Wait for dynamic titles to load
+        page.wait_for_timeout(5000)
+        
+        # Parse titles
+        elements = page.query_selector_all("a, h2, h3")
+        for elem in elements:
             text = elem.inner_text().strip()
             if text and len(text) > 2:
                 if not any(x in text.lower() for x in ["trending", "streaming", "release", "view all", "binged", "privacy", "terms", "filters", "clear"]):
@@ -105,7 +111,7 @@ def run_scraper():
                         
         browser.close()
 
-    print(f"Playwright successfully captured {len(items)} titles from rendered DOM.")
+    print(f"Playwright extracted {len(items)} titles.")
     new_additions = 0
 
     for item in items[:15]:
@@ -132,16 +138,11 @@ def run_scraper():
         if send_telegram(message, poster_url):
             seen_titles.add(item_id)
             new_additions += 1
-            print(f"Posted to Telegram: {title}")
+            print(f"Telegram alert sent for: {title}")
 
-    if new_additions > 0:
-        save_seen(seen_titles)
-        print(f"Done. Sent {new_additions} new releases.")
-    else:
-        print("No new unseen releases found.")
+    # Ensure file is saved even if empty to prevent git errors
+    save_seen(seen_titles)
+    print(f"Process complete. {new_additions} alerts posted.")
 
 if __name__ == "__main__":
     run_scraper()
-- name: Install Playwright Browser
-  run: |
-    playwright install chromium
