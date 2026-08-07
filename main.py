@@ -2,10 +2,10 @@ import os
 import json
 import re
 import requests
-from bs4 import BeautifulSoup
 from urllib.parse import quote
+from playwright.sync_api import sync_playwright
 
-# ---------------- PATHS & CONFIG ----------------
+# ---------------- CONFIGURATION ----------------
 BINGED_URL = "https://www.binged.com/streaming-premiere-dates/"
 SEEN_FILE = "seen_titles.json"
 CONFIG_FILE = "config.json"
@@ -67,16 +67,14 @@ def send_telegram(text, poster_url=None):
             "chat_id": TELEGRAM_CHAT_ID,
             "photo": poster_url,
             "caption": text,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": False
+            "parse_mode": "Markdown"
         }
     else:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
             "text": text,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": False
+            "parse_mode": "Markdown"
         }
     res = requests.post(url, data=payload, timeout=10)
     return res.status_code == 200
@@ -84,39 +82,33 @@ def send_telegram(text, poster_url=None):
 def run_scraper():
     config = load_config()
     seen_titles = load_seen()
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    
-    params = {
-        "language": ",".join(config.get("language", [])),
-        "category": ",".join(config.get("category", [])),
-        "rating": ",".join(config.get("rating", []))
-    }
-    
-    try:
-        response = requests.get(BINGED_URL, headers=headers, params=params, timeout=15)
-        if response.status_code != 200:
-            print(f"Failed to fetch Binged releases. HTTP Status: {response.status_code}")
-            return
-    except Exception as e:
-        print(f"Request Error: {e}")
-        return
-
-    soup = BeautifulSoup(response.content, "html.parser")
     items = []
 
-    for tag in soup.find_all(["h2", "h3", "a"]):
-        title_text = tag.get_text(strip=True)
-        if title_text and len(title_text) > 2 and not any(x in title_text.lower() for x in ["trending", "streaming", "release", "view all", "binged", "privacy"]):
-            clean_title = re.sub(r'\s+', ' ', title_text)
-            if clean_title not in [i['title'] for i in items]:
-                items.append({'title': clean_title})
+    print("Launching Chromium browser with Playwright...")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(BINGED_URL, wait_until="networkidle", timeout=30000)
+        
+        # Wait for dynamic cards to populate
+        page.wait_for_timeout(3000)
+        
+        # Extract rendered text elements
+        title_elements = page.query_selector_all("a, h2, h3")
+        for elem in title_elements:
+            text = elem.inner_text().strip()
+            if text and len(text) > 2:
+                if not any(x in text.lower() for x in ["trending", "streaming", "release", "view all", "binged", "privacy", "terms", "filters", "clear"]):
+                    clean_title = re.sub(r'\s+', ' ', text)
+                    if clean_title not in [i['title'] for i in items]:
+                        items.append({'title': clean_title})
+                        
+        browser.close()
 
+    print(f"Playwright successfully captured {len(items)} titles from rendered DOM.")
     new_additions = 0
 
-    for item in items[:10]:
+    for item in items[:15]:
         title = item['title']
         item_id = re.sub(r'[^a-zA-Z0-9]', '', title.lower())
         
@@ -131,7 +123,7 @@ def run_scraper():
         message = (
             f"🎬 *{title}*\n\n"
             f"⭐ *IMDb / TMDB:* {rating}\n"
-            f"🗣 *Filter Match:* {languages_str}\n"
+            f"🗣 *Languages:* {languages_str}\n"
             f"📺 *Source:* Binged Release\n\n"
             f"▶ [Open in Stremio]({stremio_link})\n"
             f"🔗 [View on Binged]({binged_search_link})"
@@ -140,12 +132,13 @@ def run_scraper():
         if send_telegram(message, poster_url):
             seen_titles.add(item_id)
             new_additions += 1
-            print(f"Alert sent for: {title}")
+            print(f"Posted to Telegram: {title}")
 
     if new_additions > 0:
         save_seen(seen_titles)
+        print(f"Done. Sent {new_additions} new releases.")
     else:
-        print("No new releases matching criteria.")
+        print("No new unseen releases found.")
 
 if __name__ == "__main__":
     run_scraper()
