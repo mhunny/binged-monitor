@@ -581,8 +581,8 @@ def parse_cards(html):
     used = set()
 
     # --------------------------------------------------------
-    # Method 1:
-    # Find actual Binged content links.
+    # Find every useful link on the Binged page.
+    # Do NOT require rating/date at this stage.
     # --------------------------------------------------------
 
     for anchor in soup.find_all(
@@ -590,40 +590,52 @@ def parse_cards(html):
         href=True
     ):
 
+        title = clean_title(
+            clean_text(
+                anchor.get_text(
+                    " ",
+                    strip=True
+                )
+            )
+        )
+
         href = anchor.get(
             "href",
             ""
         )
 
-        if not is_content_link(href):
-            continue
-
-        raw_title = clean_text(
-            anchor.get_text(
-                " ",
-                strip=True
-            )
-        )
-
-        title = clean_title(
-            raw_title
-        )
-
         if not title:
             continue
 
-        if len(title) < 2:
+        if len(title) < 2 or len(title) > 150:
             continue
 
-        if len(title) > 150:
+        lower = title.lower()
+
+        # Ignore website navigation.
+        if lower in {
+            "home",
+            "view all",
+            "read more",
+            "next",
+            "previous",
+            "next page",
+            "previous page",
+            "filters",
+            "clear",
+            "reviews",
+            "news",
+            "ranked lists",
+            "streaming dates",
+            "privacy policy",
+            "terms of use",
+        }:
             continue
 
-        if is_navigation_title(title):
-            continue
-
-        if title.lower() in {
-            x.lower()
-            for x in RATINGS
+        # Ignore rating-only links.
+        if lower in {
+            rating.lower()
+            for rating in RATINGS
         }:
             continue
 
@@ -636,206 +648,122 @@ def parse_cards(html):
             continue
 
         # ----------------------------------------------------
-        # Find surrounding card.
+        # Look around the title for its information.
         # ----------------------------------------------------
 
-        container = find_best_container(
-            anchor
-        )
+        container = anchor
+
+        best_container = anchor
+
+        for _ in range(10):
+
+            if not container:
+                break
+
+            text = clean_text(
+                container.get_text(
+                    " ",
+                    strip=True
+                )
+            )
+
+            if 20 <= len(text) <= 5000:
+
+                best_container = container
+
+                # Stop when this block contains useful
+                # release information.
+                if (
+                    find_rating(text)
+                    != "Not listed"
+                    or find_date(text)
+                    != "Not listed"
+                ):
+                    break
+
+            container = container.parent
 
         text = clean_text(
-            container.get_text(
+            best_container.get_text(
                 " ",
                 strip=True
             )
         )
 
         # ----------------------------------------------------
-        # Rating
+        # Extract whatever information is actually available.
+        # Missing fields are NOT allowed to kill the title.
         # ----------------------------------------------------
 
         rating = find_rating(text)
 
-        if rating == "Not listed":
-
-            rating = find_rating(
-                str(container)
-            )
-
-        if rating == "Not listed":
-            continue
-
-        # ----------------------------------------------------
-        # Date
-        # ----------------------------------------------------
-
         release_date = find_date(text)
 
-        if release_date == "Not listed":
+        content_type = find_type(text)
 
-            release_date = find_date(
-                str(container)
+        genre = find_genres(text)
+
+        language = find_languages(text)
+
+        platform = extract_platform(
+            best_container
+        )
+
+        # ----------------------------------------------------
+        # Keep only likely content titles.
+        #
+        # A title should either have a Binged content URL
+        # OR meaningful release metadata.
+        # ----------------------------------------------------
+
+        href_lower = href.lower()
+
+        is_binged_content = (
+            "binged.com" in href_lower
+            and (
+                "/movie/" in href_lower
+                or "/tv-show/" in href_lower
+                or "/web-series/" in href_lower
+                or "/streaming-premiere-dates/" in href_lower
             )
+        )
 
-        if release_date == "Not listed":
+        has_metadata = (
+            rating != "Not listed"
+            or release_date != "Not listed"
+            or content_type != "Not listed"
+        )
+
+        if not is_binged_content and not has_metadata:
             continue
 
         # ----------------------------------------------------
-        # Create card
+        # Create card.
         # ----------------------------------------------------
 
         card = {
             "title": title,
-
             "rating": rating,
-
             "date": release_date,
-
             "date_object": parse_date(
                 release_date
             ),
-
-            "type": find_type(
-                text
-            ),
-
-            "genre": find_genres(
-                text
-            ),
-
-            "language": find_languages(
-                text
-            ),
-
-            "platform": extract_platform(
-                container
-            ),
-
+            "type": content_type,
+            "genre": genre,
+            "language": language,
+            "platform": platform,
             "binged_link": urljoin(
                 BINGED_BASE,
                 href
             ),
         }
 
-        cards.append(
-            card
-        )
+        cards.append(card)
 
-        used.add(
-            key
-        )
+        used.add(key)
 
     # --------------------------------------------------------
-    # Method 2:
-    # Fallback: article/list cards.
-    #
-    # This catches layouts where the title link itself
-    # is not a direct content URL.
-    # --------------------------------------------------------
-
-    if not cards:
-
-        for element in soup.find_all(
-            [
-                "article",
-                "li",
-                "tr",
-                "div",
-            ]
-        ):
-
-            text = clean_text(
-                element.get_text(
-                    " ",
-                    strip=True
-                )
-            )
-
-            if len(text) < 30:
-                continue
-
-            if len(text) > 4000:
-                continue
-
-            rating = find_rating(text)
-
-            if rating == "Not listed":
-                continue
-
-            release_date = find_date(text)
-
-            if release_date == "Not listed":
-                continue
-
-            title = None
-            href = None
-
-            for anchor in element.find_all(
-                "a",
-                href=True
-            ):
-
-                candidate = clean_title(
-                    clean_text(
-                        anchor.get_text(
-                            " ",
-                            strip=True
-                        )
-                    )
-                )
-
-                candidate_href = anchor.get(
-                    "href"
-                )
-
-                if not candidate:
-                    continue
-
-                if is_navigation_title(
-                    candidate
-                ):
-                    continue
-
-                if (
-                    2 <= len(candidate) <= 150
-                    and is_content_link(
-                        candidate_href
-                    )
-                ):
-
-                    title = candidate
-                    href = candidate_href
-                    break
-
-            if not title:
-                continue
-
-            key = normal_key(title)
-
-            if not key or key in used:
-                continue
-
-            cards.append({
-                "title": title,
-                "rating": rating,
-                "date": release_date,
-                "date_object": parse_date(
-                    release_date
-                ),
-                "type": find_type(text),
-                "genre": find_genres(text),
-                "language": find_languages(text),
-                "platform": extract_platform(element),
-                "binged_link": urljoin(
-                    BINGED_BASE,
-                    href
-                ),
-            })
-
-            used.add(key)
-
-    # --------------------------------------------------------
-    # Sort newest first.
+    # Sort by release date where available.
     # --------------------------------------------------------
 
     cards.sort(
@@ -851,7 +779,6 @@ def parse_cards(html):
     )
 
     return cards
-
 
 # ============================================================
 # SCRAPERAPI
