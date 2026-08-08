@@ -580,65 +580,93 @@ def parse_cards(html):
     cards = []
     used = set()
 
-    # --------------------------------------------------------
-    # Find every useful link on the Binged page.
-    # Do NOT require rating/date at this stage.
-    # --------------------------------------------------------
+    # ========================================================
+    # TITLE EXTRACTION
+    # This deliberately uses the simple method that worked
+    # earlier: scan headings and links for actual titles.
+    # ========================================================
 
-    for anchor in soup.find_all(
-        "a",
-        href=True
+    excluded = {
+        "home",
+        "binged",
+        "streaming",
+        "streaming now",
+        "streaming soon",
+        "view all",
+        "read more",
+        "filters",
+        "clear",
+        "reviews",
+        "news",
+        "ranked lists",
+        "privacy policy",
+        "terms of use",
+        "skip ad",
+        "watch latest movies & web series on aha!",
+        "previous",
+        "next",
+        "next page",
+        "previous page",
+    }
+
+    for element in soup.find_all(
+        ["h1", "h2", "h3", "h4", "a"]
     ):
 
-        title = clean_title(
-            clean_text(
-                anchor.get_text(
-                    " ",
-                    strip=True
-                )
+        raw_title = clean_text(
+            element.get_text(
+                " ",
+                strip=True
             )
         )
 
-        href = anchor.get(
-            "href",
-            ""
-        )
-
-        if not title:
+        if not raw_title:
             continue
 
-        if len(title) < 2 or len(title) > 150:
+        title = clean_title(raw_title)
+
+        if len(title) < 2:
+            continue
+
+        if len(title) > 150:
             continue
 
         lower = title.lower()
 
-        # Ignore website navigation.
+        # Ignore navigation / website text.
+        if lower in excluded:
+            continue
+
+        # Ignore rating names by themselves.
         if lower in {
-            "home",
-            "view all",
-            "read more",
-            "next",
-            "previous",
-            "next page",
-            "previous page",
-            "filters",
-            "clear",
-            "reviews",
-            "news",
-            "ranked lists",
-            "streaming dates",
-            "privacy policy",
-            "terms of use",
+            "must watch",
+            "good",
+            "satisfactory",
+            "passable",
+            "poor",
+            "skip",
         }:
             continue
 
-        # Ignore rating-only links.
+        # Ignore obvious filter labels.
         if lower in {
-            rating.lower()
-            for rating in RATINGS
+            "film",
+            "tv show",
+            "hindi",
+            "punjabi",
+            "telugu",
+            "tamil",
+            "malayalam",
+            "kannada",
+            "bengali",
+            "marathi",
+            "gujarati",
+            "english",
+            "urdu",
         }:
             continue
 
+        # Avoid duplicate titles.
         key = normal_key(title)
 
         if not key:
@@ -647,15 +675,15 @@ def parse_cards(html):
         if key in used:
             continue
 
-        # ----------------------------------------------------
-        # Look around the title for its information.
-        # ----------------------------------------------------
+        # ====================================================
+        # We now look around the title for metadata.
+        # Metadata is OPTIONAL.
+        # ====================================================
 
-        container = anchor
+        container = element
 
-        best_container = anchor
-
-        for _ in range(10):
+        # Move upward a few levels to find the release card.
+        for _ in range(8):
 
             if not container:
                 break
@@ -667,79 +695,68 @@ def parse_cards(html):
                 )
             )
 
-            if 20 <= len(text) <= 5000:
+            # A reasonable card normally contains some
+            # surrounding information.
+            if 20 <= len(text) <= 3000:
 
-                best_container = container
+                rating = find_rating(text)
+                release_date = find_date(text)
 
-                # Stop when this block contains useful
-                # release information.
                 if (
-                    find_rating(text)
-                    != "Not listed"
-                    or find_date(text)
-                    != "Not listed"
+                    rating != "Not listed"
+                    or release_date != "Not listed"
                 ):
                     break
 
             container = container.parent
 
-        text = clean_text(
-            best_container.get_text(
+        if not container:
+            container = element
+
+        card_text = clean_text(
+            container.get_text(
                 " ",
                 strip=True
             )
         )
 
-        # ----------------------------------------------------
-        # Extract whatever information is actually available.
-        # Missing fields are NOT allowed to kill the title.
-        # ----------------------------------------------------
+        rating = find_rating(card_text)
+        release_date = find_date(card_text)
+        content_type = find_type(card_text)
+        genre = find_genres(card_text)
+        language = find_languages(card_text)
+        platform = extract_platform(container)
 
-        rating = find_rating(text)
+        # ====================================================
+        # LINK
+        # ====================================================
 
-        release_date = find_date(text)
+        link = None
 
-        content_type = find_type(text)
+        if element.name == "a":
+            link = element.get("href")
 
-        genre = find_genres(text)
-
-        language = find_languages(text)
-
-        platform = extract_platform(
-            best_container
-        )
-
-        # ----------------------------------------------------
-        # Keep only likely content titles.
-        #
-        # A title should either have a Binged content URL
-        # OR meaningful release metadata.
-        # ----------------------------------------------------
-
-        href_lower = href.lower()
-
-        is_binged_content = (
-            "binged.com" in href_lower
-            and (
-                "/movie/" in href_lower
-                or "/tv-show/" in href_lower
-                or "/web-series/" in href_lower
-                or "/streaming-premiere-dates/" in href_lower
+        if not link:
+            anchor = container.find(
+                "a",
+                href=True
             )
+
+            if anchor:
+                link = anchor.get("href")
+
+        if not link:
+            link = BINGED_BASE
+
+        binged_link = urljoin(
+            BINGED_BASE,
+            link
         )
 
-        has_metadata = (
-            rating != "Not listed"
-            or release_date != "Not listed"
-            or content_type != "Not listed"
-        )
-
-        if not is_binged_content and not has_metadata:
-            continue
-
-        # ----------------------------------------------------
-        # Create card.
-        # ----------------------------------------------------
+        # ====================================================
+        # IMPORTANT:
+        # Do NOT reject the title because metadata is missing.
+        # ====================================================
 
         card = {
             "title": title,
@@ -752,20 +769,36 @@ def parse_cards(html):
             "genre": genre,
             "language": language,
             "platform": platform,
-            "binged_link": urljoin(
-                BINGED_BASE,
-                href
-            ),
+            "binged_link": binged_link,
         }
 
         cards.append(card)
-
         used.add(key)
 
-    # --------------------------------------------------------
-    # Sort by release date where available.
-    # --------------------------------------------------------
+    # ========================================================
+    # Remove obvious false positives after extraction.
+    # ========================================================
 
+    bad_titles = {
+        "streaming now",
+        "streaming soon",
+        "skip ad",
+        "watch latest movies & web series on aha!",
+        "latest",
+        "movies",
+        "tv shows",
+        "films",
+        "web series",
+    }
+
+    cards = [
+        card
+        for card in cards
+        if card["title"].lower()
+        not in bad_titles
+    ]
+
+    # Newest dates first where dates are available.
     cards.sort(
         key=lambda card: (
             card["date_object"]
