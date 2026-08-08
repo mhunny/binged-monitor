@@ -557,9 +557,37 @@ def find_next_page(html, current_url):
 
     for anchor in soup.find_all("a", href=True):
 
-        text = clean_text(
-            anchor.get_text(" ", strip=True)
-        ).lower()
+        for anchor in soup.find_all("a", href=True):
 
-        aria = clean_text(
-           
+    text = clean_text(
+        anchor.get_text(" ", strip=True)
+    ).lower()
+
+    aria = clean_text(
+        anchor.get("aria-label", "")
+    ).lower()
+
+    title = clean_text(
+        anchor.get("title", "")
+    ).lower()
+
+    if (
+        text in [
+            "next",
+            "next page",
+            "older",
+            "›",
+            "»",
+            "→",
+        ]
+        or "next page" in aria
+        or "next page" in title
+    ):
+
+        url = urljoin(
+            current_url,
+            anchor["href"]
+        )
+
+        if url != current_url:
+            return url
