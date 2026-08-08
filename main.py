@@ -683,60 +683,111 @@ def fetch_binged():
             "SCRAPER_API_KEY secret is missing."
         )
 
-    print(
-        "ScraperAPI request 1/1"
-    )
-
-    response = requests.get(
-        "https://api.scraperapi.com/",
-        params={
-            "api_key": SCRAPER_API_KEY,
-            "url": BINGED_URL,
-            "render": "true",
+    attempts = [
+        {
+            "name": "normal",
+            "params": {
+                "api_key": SCRAPER_API_KEY,
+                "url": BINGED_URL,
+            },
         },
-        timeout=120
-    )
-
-    print(
-        "ScraperAPI HTTP status: "
-        f"{response.status_code}"
-    )
-
-    print(
-        "Returned content length: "
-        f"{len(response.text)}"
-    )
-
-    if response.status_code != 200:
-
-        raise RuntimeError(
-            "ScraperAPI returned HTTP "
-            f"{response.status_code}"
-        )
-
-    html = response.text
-
-    lower = html[:30000].lower()
-
-    blocked_phrases = [
-        "access denied",
-        "<title>forbidden</title>",
-        "verify you are human",
-        "checking your browser",
-        "just a moment",
+        {
+            "name": "render",
+            "params": {
+                "api_key": SCRAPER_API_KEY,
+                "url": BINGED_URL,
+                "render": "true",
+            },
+        },
+        {
+            "name": "premium",
+            "params": {
+                "api_key": SCRAPER_API_KEY,
+                "url": BINGED_URL,
+                "render": "true",
+                "premium": "true",
+            },
+        },
     ]
 
-    for phrase in blocked_phrases:
+    last_error = "ScraperAPI could not fetch Binged."
 
-        if phrase in lower:
+    for attempt in attempts:
 
-            raise RuntimeError(
-                "Binged returned a "
-                "verification/block page."
+        print(
+            f"Trying ScraperAPI: {attempt['name']}"
+        )
+
+        try:
+
+            response = requests.get(
+                "https://api.scraperapi.com/",
+                params=attempt["params"],
+                timeout=120
             )
 
-    return html
+            print(
+                "ScraperAPI HTTP status: "
+                f"{response.status_code}"
+            )
 
+            print(
+                "Returned content length: "
+                f"{len(response.text)}"
+            )
+
+            if response.status_code == 200:
+
+                html = response.text
+
+                lower = html[:50000].lower()
+
+                blocked_phrases = [
+                    "access denied",
+                    "<title>forbidden</title>",
+                    "verify you are human",
+                    "checking your browser",
+                    "just a moment",
+                ]
+
+                if not any(
+                    phrase in lower
+                    for phrase in blocked_phrases
+                ):
+
+                    print(
+                        "Binged page fetched successfully."
+                    )
+
+                    return html
+
+                last_error = (
+                    "Binged returned a "
+                    "verification/block page."
+                )
+
+                print(
+                    "Binged returned a blocked page."
+                )
+
+            else:
+
+                last_error = (
+                    "ScraperAPI returned HTTP "
+                    f"{response.status_code}"
+                )
+
+        except Exception as exc:
+
+            last_error = str(exc)
+
+            print(
+                f"ScraperAPI request failed: {exc}"
+            )
+
+        time.sleep(3)
+
+    raise RuntimeError(last_error)
 
 def fetch_cards():
 
