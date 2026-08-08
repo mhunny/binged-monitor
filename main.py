@@ -62,7 +62,7 @@ def get_tmdb_data(title):
 
 def send_telegram(text, poster_url=None):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Missing Telegram secrets in env variables.")
+        print("Telegram configuration missing.")
         return False
         
     if poster_url:
