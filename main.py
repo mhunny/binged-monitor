@@ -528,7 +528,7 @@ def parse_cards(html):
 
 
 # ============================================================
-# PAGINATION
+# NEXT PAGE DETECTION
 # ============================================================
 
 def find_next_page(html, current_url):
@@ -538,56 +538,91 @@ def find_next_page(html, current_url):
         "html.parser"
     )
 
-    for anchor in soup.find_all("a", href=True):
+    # First: look for rel="next"
+    for anchor in soup.find_all(
+        "a",
+        href=True
+    ):
 
-        rel = anchor.get("rel", [])
+        rel = anchor.get("rel")
 
-        if isinstance(rel, list):
-            rel = " ".join(rel)
+        if rel:
 
-        if "next" in str(rel).lower():
+            if isinstance(rel, list):
+                rel_text = " ".join(rel).lower()
+            else:
+                rel_text = str(rel).lower()
 
-            url = urljoin(
+            if "next" in rel_text:
+
+                next_url = urljoin(
+                    current_url,
+                    anchor["href"]
+                )
+
+                if next_url != current_url:
+                    return next_url
+
+    # Second: look for a visible Next button/link
+    for anchor in soup.find_all(
+        "a",
+        href=True
+    ):
+
+        text = clean_text(
+            anchor.get_text(
+                " ",
+                strip=True
+            )
+        ).lower()
+
+        aria = clean_text(
+            anchor.get(
+                "aria-label",
+                ""
+            )
+        ).lower()
+
+        title = clean_text(
+            anchor.get(
+                "title",
+                ""
+            )
+        ).lower()
+
+        classes = " ".join(
+            anchor.get(
+                "class",
+                []
+            )
+        ).lower()
+
+        if (
+            text in [
+                "next",
+                "next page",
+                "older",
+                "older posts",
+                "›",
+                "»",
+                "→",
+            ]
+            or "next page" in aria
+            or "next page" in title
+            or "next" in classes
+        ):
+
+            next_url = urljoin(
                 current_url,
                 anchor["href"]
             )
 
-            if url != current_url:
-                return url
+            if next_url != current_url:
+                return next_url
 
-    for anchor in soup.find_all("a", href=True):
+    return None
 
-        for anchor in soup.find_all("a", href=True):
 
-    text = clean_text(
-        anchor.get_text(" ", strip=True)
-    ).lower()
-
-    aria = clean_text(
-        anchor.get("aria-label", "")
-    ).lower()
-
-    title = clean_text(
-        anchor.get("title", "")
-    ).lower()
-
-    if (
-        text in [
-            "next",
-            "next page",
-            "older",
-            "›",
-            "»",
-            "→",
-        ]
-        or "next page" in aria
-        or "next page" in title
-    ):
-
-        url = urljoin(
-            current_url,
-            anchor["href"]
-        )
-
-        if url != current_url:
-            return url
+# ============================================================
+# SCRAPERAPI FETCH
+# ============================================================
