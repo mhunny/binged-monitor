@@ -1,2 +1,1 @@
-curl_cffi
-beautifulsoup4
+playwright==1.54.0
