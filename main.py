@@ -84,32 +84,54 @@ def run_scraper():
     seen_titles = load_seen()
     items = []
 
-    print("Launching Chromium via Playwright...")
+    print("Launching Chromium in Stealth Mode...")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        # Launch browser with anti-detection flags
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ]
         )
+        
+        # Configure realistic desktop context
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800},
+            locale="en-US",
+            extra_http_headers={
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://www.google.com/"
+            }
+        )
+        
         page = context.new_page()
         
-        # Navigate to Binged
-        response = page.goto(BINGED_URL, wait_until="domcontentloaded", timeout=30000)
-        print(f"Page Load Response Status: {response.status if response else 'No Response'}")
+        # Override navigator.webdriver flag
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
-        # Wait for dynamic titles to load
-        page.wait_for_timeout(5000)
-        
-        # Parse titles
-        elements = page.query_selector_all("a, h2, h3")
-        for elem in elements:
-            text = elem.inner_text().strip()
-            if text and len(text) > 2:
-                if not any(x in text.lower() for x in ["trending", "streaming", "release", "view all", "binged", "privacy", "terms", "filters", "clear"]):
-                    clean_title = re.sub(r'\s+', ' ', text)
-                    if clean_title not in [i['title'] for i in items]:
-                        items.append({'title': clean_title})
-                        
-        browser.close()
+        try:
+            response = page.goto(BINGED_URL, wait_until="networkidle", timeout=30000)
+            status_code = response.status if response else "No Response"
+            print(f"Page Load Response Status: {status_code}")
+            
+            # Wait 5 seconds for page elements to render fully
+            page.wait_for_timeout(5000)
+            
+            elements = page.query_selector_all("a, h2, h3")
+            for elem in elements:
+                text = elem.inner_text().strip()
+                if text and len(text) > 2:
+                    if not any(x in text.lower() for x in ["trending", "streaming", "release", "view all", "binged", "privacy", "terms", "filters", "clear"]):
+                        clean_title = re.sub(r'\s+', ' ', text)
+                        if clean_title not in [i['title'] for i in items]:
+                            items.append({'title': clean_title})
+        except Exception as e:
+            print(f"Playwright Execution Error: {e}")
+        finally:
+            browser.close()
 
     print(f"Playwright extracted {len(items)} titles.")
     new_additions = 0
@@ -140,7 +162,6 @@ def run_scraper():
             new_additions += 1
             print(f"Telegram alert sent for: {title}")
 
-    # Ensure file is saved even if empty to prevent git errors
     save_seen(seen_titles)
     print(f"Process complete. {new_additions} alerts posted.")
 
