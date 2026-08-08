@@ -1053,22 +1053,24 @@ def make_keyboard(card):
 
     return {
         "inline_keyboard": [
-
             [
                 {
-                    "text": "▶ Open Stremio Web",
-                    "url": stremio_web_link(title)
-                },
-
+                    "text": "▶ Open Stremio",
+                    "url": (
+                        "https://web.stremio.com/"
+                        "#/search?search="
+                        + quote(title, safe="")
+                    )
+                }
+            ],
+            [
                 {
                     "text": "🔗 Open on Binged",
                     "url": card["binged_link"]
                 }
             ]
-
         ]
     }
-
 
 def make_message(card):
 
@@ -1083,15 +1085,9 @@ def make_message(card):
         f"🎞 Type: {card['type']}\n"
         f"🎭 Genre: {card['genre']}\n"
         f"🗣 Language: {card['language']}\n"
-        f"📺 Platform: {card['platform']}\n\n"
-        f"📱 Stremio App Deep Link:\n"
-        f"{app_link}"
+        f"📺 Platform: {card['platform']}\n\n"     
     )
 
-
-# ============================================================
-# SEEN TITLES
-# ============================================================
 # ============================================================
 # SEEN TITLES
 # ============================================================
