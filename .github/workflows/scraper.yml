@@ -1,18 +1,21 @@
 name: Binged OTT Tracker
 
 on:
+  workflow_dispatch:
+
   schedule:
     - cron: "0 * * * *"
-  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   scrape-and-notify:
+
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -30,7 +33,7 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
-      - name: Run Scraper Script
+      - name: Run Binged Scraper
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
@@ -45,8 +48,13 @@ jobs:
 
           if [ -f seen_titles.json ]; then
             git add seen_titles.json
-            git diff --cached --quiet || git commit -m "Update seen titles"
-            git push
+
+            if git diff --cached --quiet; then
+              echo "No changes to seen_titles.json"
+            else
+              git commit -m "Update seen titles"
+              git push
+            fi
           else
-            echo "seen_titles.json was not created; nothing to commit."
+            echo "seen_titles.json does not exist"
           fi
