@@ -1,2 +1,4 @@
-curl_cffi
+playwright
 beautifulsoup4
+requests
+lxml
