@@ -6,6 +6,10 @@ on:
   schedule:
     - cron: "0 * * * *"
 
+concurrency:
+  group: binged-ott-tracker
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -46,15 +50,30 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if [ -f seen_titles.json ]; then
-            git add seen_titles.json
-
-            if git diff --cached --quiet; then
-              echo "No changes to seen_titles.json"
-            else
-              git commit -m "Update seen titles"
-              git push
-            fi
-          else
-            echo "seen_titles.json does not exist"
+          if [ ! -f seen_titles.json ]; then
+            echo "seen_titles.json does not exist. Nothing to save."
+            exit 0
           fi
+
+          git add seen_titles.json
+
+          if git diff --cached --quiet; then
+            echo "No changes to seen_titles.json. Nothing to push."
+            exit 0
+          fi
+
+          echo "Changes detected. Synchronizing with origin/main..."
+
+          git fetch origin main
+          git rebase origin/main
+
+          git add seen_titles.json
+
+          if git diff --cached --quiet; then
+            echo "Changes already present on origin/main. Nothing to push."
+            exit 0
+          fi
+
+          git commit -m "Update seen titles"
+
+          git push origin HEAD:main
