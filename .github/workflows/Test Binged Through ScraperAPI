@@ -1,0 +1,45 @@
+      - name: Test Binged Through ScraperAPI
+        env:
+          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          target = (
+              "https://www.binged.com/streaming-premiere-dates/"
+              "?category%5B%5D=Film"
+              "&category%5B%5D=Tv%20show"
+              "&language%5B%5D=Hindi"
+              "&language%5B%5D=Punjabi"
+              "&mode=streaming-now"
+              "&recommendation%5B%5D=Must_Watch"
+              "&recommendation%5B%5D=Good"
+              "&recommendation%5B%5D=Satisfactory"
+              "&recommendation%5B%5D=Passable"
+          )
+
+          api_key = os.environ["SCRAPER_API_KEY"]
+
+          response = requests.get(
+              "https://api.scraperapi.com/",
+              params={
+                  "api_key": api_key,
+                  "url": target,
+                  "render": "true",
+              },
+              timeout=120
+          )
+
+          print("ScraperAPI HTTP status:", response.status_code)
+          print("Returned content length:", len(response.text))
+          print(response.text[:1000])
+
+          if response.status_code != 200:
+              raise SystemExit("ScraperAPI could not retrieve Binged.")
+
+          if "Forbidden" in response.text[:5000]:
+              raise SystemExit("Binged still returned Forbidden through ScraperAPI.")
+
+          print("SUCCESS: ScraperAPI retrieved Binged.")
+          PY
