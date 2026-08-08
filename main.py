@@ -507,20 +507,59 @@ def fetch_binged_listing():
         BINGED_FILTERED_URL
     )
 
-    # JS-rendered request is retained because this is the
-    # request that was previously returning the actual page.
-    html = scraperapi_fetch(
-        BINGED_FILTERED_URL,
-        render=True
+    # First try normal ScraperAPI request.
+    try:
+        print("Trying ScraperAPI: normal")
+
+        html = scraperapi_fetch(
+            BINGED_FILTERED_URL,
+            render=False
+        )
+
+        print(
+            f"Returned content length: "
+            f"{len(html)}"
+        )
+
+        if len(html) > 10000:
+            print(
+                "Binged page fetched successfully."
+            )
+            return html
+
+    except Exception as exc:
+        print(
+            f"Normal request failed: {exc}"
+        )
+
+    # If normal request fails, try rendered request.
+    try:
+        print("Trying ScraperAPI: rendered")
+
+        html = scraperapi_fetch(
+            BINGED_FILTERED_URL,
+            render=True
+        )
+
+        print(
+            f"Returned content length: "
+            f"{len(html)}"
+        )
+
+        if len(html) > 10000:
+            print(
+                "Binged page fetched successfully."
+            )
+            return html
+
+    except Exception as exc:
+        print(
+            f"Rendered request failed: {exc}"
+        )
+
+    raise RuntimeError(
+        "Could not fetch Binged right now."
     )
-
-    print(
-        f"Returned content length: "
-        f"{len(html)}"
-    )
-
-    return html
-
 
 # ============================================================
 # FIND ACTUAL BINGED TITLE LINKS
