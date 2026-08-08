@@ -1,9 +1,9 @@
 import os
 import json
 import re
-import requests
 from urllib.parse import quote
-from playwright.sync_api import sync_playwright
+from bs4 import BeautifulSoup
+from curl_cffi import requests
 
 # ---------------- CONFIGURATION ----------------
 BINGED_URL = "https://www.binged.com/streaming-premiere-dates/"
@@ -46,7 +46,7 @@ def get_tmdb_data(title):
     
     url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={quote(title)}&language=en-US"
     try:
-        res = requests.get(url, timeout=10).json()
+        res = requests.get(url, timeout=10, impersonate="chrome120").json()
         results = res.get("results", [])
         if results:
             first = results[0]
@@ -76,64 +76,49 @@ def send_telegram(text, poster_url=None):
             "text": text,
             "parse_mode": "Markdown"
         }
-    res = requests.post(url, data=payload, timeout=10)
+    res = requests.post(url, data=payload, timeout=10, impersonate="chrome120")
     return res.status_code == 200
 
 def run_scraper():
     config = load_config()
     seen_titles = load_seen()
+    
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/"
+    }
+    
+    print("Fetching Binged page using Chrome TLS impersonation...")
+    try:
+        # Impersonate Chrome 120 TLS handshake to bypass Cloudflare 403
+        response = requests.get(
+            BINGED_URL, 
+            headers=headers, 
+            impersonate="chrome120", 
+            timeout=15
+        )
+        print(f"Page Load Response Status: {response.status_code}")
+        if response.status_code != 200:
+            print("Failed to bypass Cloudflare block.")
+            return
+    except Exception as e:
+        print(f"Request Error: {e}")
+        return
+
+    soup = BeautifulSoup(response.content, "html.parser")
     items = []
 
-    print("Launching Chromium in Stealth Mode...")
-    with sync_playwright() as p:
-        # Launch browser with anti-detection flags
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-setuid-sandbox"
-            ]
-        )
-        
-        # Configure realistic desktop context
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 800},
-            locale="en-US",
-            extra_http_headers={
-                "Accept-Language": "en-US,en;q=0.9",
-                "Referer": "https://www.google.com/"
-            }
-        )
-        
-        page = context.new_page()
-        
-        # Override navigator.webdriver flag
-        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        
-        try:
-            response = page.goto(BINGED_URL, wait_until="networkidle", timeout=30000)
-            status_code = response.status if response else "No Response"
-            print(f"Page Load Response Status: {status_code}")
-            
-            # Wait 5 seconds for page elements to render fully
-            page.wait_for_timeout(5000)
-            
-            elements = page.query_selector_all("a, h2, h3")
-            for elem in elements:
-                text = elem.inner_text().strip()
-                if text and len(text) > 2:
-                    if not any(x in text.lower() for x in ["trending", "streaming", "release", "view all", "binged", "privacy", "terms", "filters", "clear"]):
-                        clean_title = re.sub(r'\s+', ' ', text)
-                        if clean_title not in [i['title'] for i in items]:
-                            items.append({'title': clean_title})
-        except Exception as e:
-            print(f"Playwright Execution Error: {e}")
-        finally:
-            browser.close()
+    # Parse title links
+    for tag in soup.find_all(["h2", "h3", "a"]):
+        text = tag.get_text(strip=True)
+        if text and len(text) > 2:
+            if not any(x in text.lower() for x in ["trending", "streaming", "release", "view all", "binged", "privacy", "terms", "filters", "clear"]):
+                clean_title = re.sub(r'\s+', ' ', text)
+                if clean_title not in [i['title'] for i in items]:
+                    items.append({'title': clean_title})
 
-    print(f"Playwright extracted {len(items)} titles.")
+    print(f"Extracted {len(items)} titles from Binged.")
     new_additions = 0
 
     for item in items[:15]:
