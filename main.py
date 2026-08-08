@@ -91,7 +91,6 @@ def run_scraper():
     
     print("Fetching Binged page using Chrome TLS impersonation...")
     try:
-        # Impersonate Chrome 120 TLS handshake to bypass Cloudflare 403
         response = requests.get(
             BINGED_URL, 
             headers=headers, 
@@ -100,7 +99,7 @@ def run_scraper():
         )
         print(f"Page Load Response Status: {response.status_code}")
         if response.status_code != 200:
-            print("Failed to bypass Cloudflare block.")
+            print("Failed to load page.")
             return
     except Exception as e:
         print(f"Request Error: {e}")
@@ -109,7 +108,6 @@ def run_scraper():
     soup = BeautifulSoup(response.content, "html.parser")
     items = []
 
-    # Parse title links
     for tag in soup.find_all(["h2", "h3", "a"]):
         text = tag.get_text(strip=True)
         if text and len(text) > 2:
