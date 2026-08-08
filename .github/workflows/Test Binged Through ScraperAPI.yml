@@ -1,5 +1,4 @@
-      - name: Test Binged Through ScraperAPI
-        env:
+env:
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
         run: |
           python - <<'PY'
