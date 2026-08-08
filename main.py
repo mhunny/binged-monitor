@@ -556,83 +556,139 @@ def parse_cards(html):
         "html.parser"
     )
 
-    date_pattern = re.compile(
-        r"\b"
-        r"\d{1,2}\s+"
-        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
-        r"\s+\d{4}"
-        r"\b",
-        re.IGNORECASE
-    )
+    cards = []
+    used = set()
 
-    rating_pattern = re.compile(
-        r"\b"
-        r"(?:Must Watch|Good|Satisfactory|Passable|Poor|Skip)"
-        r"\b",
-        re.IGNORECASE
-    )
+    # --------------------------------------------------------
+    # Find all links that look like Binged title pages
+    # --------------------------------------------------------
 
-    candidates = []
-
-    for element in soup.find_all(
-        [
-            "article",
-            "li",
-            "tr",
-            "div",
-        ]
+    for anchor in soup.find_all(
+        "a",
+        href=True
     ):
 
-        text = clean_text(
-            element.get_text(
+        href = anchor.get("href", "")
+
+        if not href:
+            continue
+
+        href_lower = href.lower()
+
+        # Only consider Binged content pages.
+        if "binged.com" not in href_lower:
+            continue
+
+        if not any(
+            path in href_lower
+            for path in [
+                "/movie/",
+                "/tv-show/",
+                "/web-series/",
+                "/streaming-premiere-dates/"
+            ]
+        ):
+            continue
+
+        raw_title = clean_text(
+            anchor.get_text(
                 " ",
                 strip=True
             )
         )
 
-        if len(text) < 30:
+        title = clean_title(raw_title)
+
+        if not title:
             continue
 
-        if len(text) > 2500:
+        if len(title) < 2 or len(title) > 150:
             continue
 
-        if not date_pattern.search(text):
+        # Ignore navigation links.
+        if title.lower() in {
+            "view all",
+            "read more",
+            "streaming dates",
+            "filters",
+            "clear",
+            "home",
+            "reviews",
+            "news",
+            "ranked lists",
+            "next",
+            "previous",
+        }:
             continue
 
-        if not rating_pattern.search(text):
-            continue
+        # ----------------------------------------------------
+        # Look around the title for the information.
+        # ----------------------------------------------------
 
-        candidates.append(
-            (
-                element,
-                text
+        container = anchor
+
+        # Move upwards until we find a useful content block.
+        for _ in range(5):
+
+            if not container.parent:
+                break
+
+            parent = container.parent
+
+            parent_text = clean_text(
+                parent.get_text(
+                    " ",
+                    strip=True
+                )
+            )
+
+            if 30 <= len(parent_text) <= 2500:
+                container = parent
+                break
+
+            container = parent
+
+        text = clean_text(
+            container.get_text(
+                " ",
+                strip=True
             )
         )
 
-    candidates.sort(
-        key=lambda x: len(x[1])
-    )
-
-    cards = []
-    used = set()
-
-    for element, text in candidates:
+        # ----------------------------------------------------
+        # Rating
+        # ----------------------------------------------------
 
         rating = find_rating(text)
-        release_date = find_date(text)
+
+        if rating == "Not listed":
+
+            # Check immediate parent/anchor HTML too.
+            rating = find_rating(
+                str(container)
+            )
 
         if rating == "Not listed":
             continue
 
+        # ----------------------------------------------------
+        # Release date
+        # ----------------------------------------------------
+
+        release_date = find_date(text)
+
+        if release_date == "Not listed":
+
+            release_date = find_date(
+                str(container)
+            )
+
         if release_date == "Not listed":
             continue
 
-        title, link = find_title_link(
-            element
-        )
-
-        if not title:
-            continue
+        # ----------------------------------------------------
+        # Deduplicate
+        # ----------------------------------------------------
 
         key = normal_key(title)
 
@@ -642,35 +698,47 @@ def parse_cards(html):
         if key in used:
             continue
 
-        cards.append(
-            {
-                "title": title,
-                "rating": rating,
-                "date": release_date,
-                "date_object": parse_date(
-                    release_date
-                ),
-                "type": find_type(text),
-                "genre": find_genres(text),
-                "language": find_languages(text),
-                "platform": extract_platform(
-                    element
-                ),
-                "binged_link": (
-                    urljoin(
-                        BINGED_BASE,
-                        link
-                    )
-                    if link
-                    else BINGED_BASE
-                ),
-            }
-        )
+        # ----------------------------------------------------
+        # Create card
+        # ----------------------------------------------------
 
+        card = {
+            "title": title,
+            "rating": rating,
+            "date": release_date,
+            "date_object": parse_date(
+                release_date
+            ),
+            "type": find_type(text),
+            "genre": find_genres(text),
+            "language": find_languages(text),
+            "platform": extract_platform(container),
+            "binged_link": urljoin(
+                BINGED_BASE,
+                href
+            ),
+        }
+
+        cards.append(card)
         used.add(key)
 
-    return cards
+    # --------------------------------------------------------
+    # Sort newest first
+    # --------------------------------------------------------
 
+    cards.sort(
+        key=lambda card: (
+            card["date_object"]
+            or datetime.min
+        ),
+        reverse=True
+    )
+
+    print(
+        f"Extracted {len(cards)} title(s)"
+    )
+
+    return cards
 
 # ============================================================
 # SCRAPERAPI
