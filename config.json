@@ -1,7 +1,6 @@
 {
   "language": [
-    "Hindi",
-    "Punjabi"
+    "Hindi"
   ],
   "category": [
     "Film",
@@ -12,5 +11,6 @@
     "Good",
     "Satisfactory",
     "Passable"
-  ]
+  ],
+  "release_mode": "today"
 }
