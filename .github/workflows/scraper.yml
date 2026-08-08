@@ -52,7 +52,7 @@ jobs:
           python main.py
 
       - name: Save Bot State
-        if: success()
+        if: always()
         uses: actions/cache/save@v4
         with:
           path: |
