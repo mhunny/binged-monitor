@@ -10,24 +10,21 @@ concurrency:
   group: binged-telegram
   cancel-in-progress: false
 
-permissions:
-  contents: read
-
 jobs:
 
   binged-telegram:
 
     runs-on: ubuntu-latest
 
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.10"
 
@@ -36,17 +33,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Restore Tracker State
+      - name: Restore Bot State
         uses: actions/cache/restore@v4
         with:
           path: |
+            binged_cache.json
             seen_titles.json
-            telegram_offset.json
           key: binged-state-${{ github.run_id }}
           restore-keys: |
             binged-state-
 
-      - name: Run Binged Telegram Bot
+      - name: Run Binged Telegram Tracker
         env:
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -54,11 +51,11 @@ jobs:
         run: |
           python main.py
 
-      - name: Save Tracker State
-        if: always()
+      - name: Save Bot State
+        if: success()
         uses: actions/cache/save@v4
         with:
           path: |
+            binged_cache.json
             seen_titles.json
-            telegram_offset.json
           key: binged-state-${{ github.run_id }}
