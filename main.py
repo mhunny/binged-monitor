@@ -11,12 +11,12 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# BINGED OTT TRACKER
+# CONFIGURATION
 # ============================================================
 
 BINGED_BASE = "https://www.binged.com/streaming-premiere-dates/"
 
-BINGED_URL = (
+BINGED_FILTERED_URL = (
     BINGED_BASE
     + "?category%5B%5D=Film"
     + "&category%5B%5D=Tv%20show"
@@ -36,12 +36,18 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 SEEN_FILE = "seen_titles.json"
+OFFSET_FILE = "telegram_offset.json"
 
 IST = ZoneInfo("Asia/Kolkata")
 
-# GitHub runs approximately every 5 minutes.
-# A command is considered recent for 7 minutes.
-COMMAND_MAX_AGE = 7 * 60
+# Maximum releases processed from one listing page.
+MAX_TITLES = 20
+
+# Detail pages are fetched one by one.
+DETAIL_DELAY = 0.3
+
+# A Telegram command older than this is ignored.
+COMMAND_MAX_AGE = 15 * 60
 
 
 # ============================================================
@@ -74,6 +80,11 @@ LANGUAGES = [
     "Gujarati",
     "English",
     "Urdu",
+    "Assamese",
+    "Bhojpuri",
+    "Konkani",
+    "Odia",
+    "Rajasthani",
 ]
 
 
@@ -88,6 +99,7 @@ GENRES = [
     "Biography",
     "Comedy",
     "Crime",
+    "Documentary",
     "Drama",
     "Family",
     "Fantasy",
@@ -110,6 +122,70 @@ GENRES = [
     "Thriller",
     "War",
     "Western",
+]
+
+
+# ============================================================
+# PLATFORMS
+# ============================================================
+
+PLATFORMS = [
+    ("amazon prime video", "Prime Video"),
+    ("prime video", "Prime Video"),
+    ("amazon", "Prime Video"),
+
+    ("jio hotstar", "Jio Hotstar"),
+    ("jiohotstar", "Jio Hotstar"),
+    ("disney plus hotstar", "Jio Hotstar"),
+    ("disney hotstar", "Jio Hotstar"),
+    ("hotstar", "Jio Hotstar"),
+
+    ("sony liv", "Sony LIV"),
+    ("sonyliv", "Sony LIV"),
+
+    ("zee5", "ZEE5"),
+    ("zee 5", "ZEE5"),
+
+    ("mx player", "MX Player"),
+    ("mxplayer", "MX Player"),
+
+    ("apple tv plus", "Apple TV+"),
+    ("apple tv+", "Apple TV+"),
+    ("apple tv", "Apple TV+"),
+
+    ("jio cinema", "JioCinema"),
+    ("jiocinema", "JioCinema"),
+
+    ("sun nxt", "Sun NXT"),
+    ("sunnxt", "Sun NXT"),
+
+    ("lionsgate play", "Lionsgate Play"),
+    ("discovery plus", "Discovery+"),
+
+    ("airtel xstream", "Airtel Xstream"),
+
+    ("manorama max", "Manorama MAX"),
+    ("shemaroo me", "Shemaroo Me"),
+    ("etv win", "ETV Win"),
+
+    ("alt balaji", "ALT Balaji"),
+    ("crunchyroll", "Crunchyroll"),
+
+    ("simply south", "Simply South"),
+    ("tentkotta", "Tentkotta"),
+
+    ("chaupal", "Chaupal"),
+    ("hoichoi", "Hoichoi"),
+
+    ("mubi", "Mubi"),
+    ("tubi", "Tubi"),
+    ("viki", "Viki"),
+    ("viu", "Viu"),
+    ("voot", "Voot"),
+    ("youtube", "YouTube"),
+    ("aha video", "aha"),
+    ("aha", "aha"),
+    ("netflix", "Netflix"),
 ]
 
 
@@ -144,7 +220,7 @@ COMMANDS = {
 # ============================================================
 
 def clean_text(value):
-    if not value:
+    if value is None:
         return ""
 
     return re.sub(
@@ -166,27 +242,43 @@ def parse_date(value):
     if not value:
         return None
 
+    value = clean_text(value)
+
+    patterns = [
+        "%d %b %Y",
+        "%d %B %Y",
+    ]
+
     match = re.search(
-        r"\b"
-        r"\d{1,2}\s+"
+        r"\b\d{1,2}\s+"
         r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
-        r"\s+\d{4}"
-        r"\b",
+        r"\s+\d{4}\b",
         value,
-        re.IGNORECASE
+        re.IGNORECASE,
     )
 
     if not match:
         return None
 
-    try:
-        return datetime.strptime(
-            match.group(0),
-            "%d %b %Y"
-        )
+    for fmt in patterns:
+        try:
+            return datetime.strptime(
+                match.group(0),
+                fmt
+            )
+        except ValueError:
+            pass
 
-    except ValueError:
-        return None
+    return None
+
+
+def format_date(value):
+    parsed = parse_date(value)
+
+    if not parsed:
+        return "Not listed"
+
+    return parsed.strftime("%d %b %Y")
 
 
 # ============================================================
@@ -194,13 +286,13 @@ def parse_date(value):
 # ============================================================
 
 def find_rating(text):
+    text = clean_text(text)
 
     for rating in sorted(
         RATINGS,
         key=len,
         reverse=True
     ):
-
         if re.search(
             rf"\b{re.escape(rating)}\b",
             text,
@@ -212,21 +304,26 @@ def find_rating(text):
 
 
 def find_date(text):
+    text = clean_text(text)
 
     match = re.search(
-        r"\b"
-        r"\d{1,2}\s+"
+        r"\b\d{1,2}\s+"
         r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
-        r"\s+\d{4}"
-        r"\b",
+        r"\s+\d{4}\b",
         text,
         re.IGNORECASE
     )
 
-    return match.group(0) if match else "Not listed"
+    if match:
+        return format_date(
+            match.group(0)
+        )
+
+    return "Not listed"
 
 
 def find_type(text):
+    text = clean_text(text)
 
     if re.search(
         r"\bTV\s*Show\b",
@@ -242,177 +339,87 @@ def find_type(text):
     ):
         return "Film"
 
-    if re.search(
-        r"\bTv\s+show\b",
-        text,
-        re.IGNORECASE
-    ):
-        return "TV Show"
-
     return "Not listed"
 
 
-def find_languages(text):
-
-    found = []
-
-    for language in LANGUAGES:
-
-        if re.search(
-            rf"\b{re.escape(language)}\b",
-            text,
-            re.IGNORECASE
-        ):
-
-            if language not in found:
-                found.append(language)
-
-    return ", ".join(found) if found else "Not listed"
-
-
 def find_genres(text):
+    text = clean_text(text)
 
     found = []
 
     for genre in GENRES:
-
         if re.search(
-            rf"\b{re.escape(genre)}\b",
+            rf"(?<![A-Za-z]){re.escape(genre)}(?![A-Za-z])",
             text,
             re.IGNORECASE
         ):
-
             if genre not in found:
                 found.append(genre)
 
     return ", ".join(found) if found else "Not listed"
 
 
-# ============================================================
-# PLATFORM
-# ============================================================
+def find_languages(text):
+    text = clean_text(text)
+
+    found = []
+
+    for language in LANGUAGES:
+        if re.search(
+            rf"(?<![A-Za-z]){re.escape(language)}(?![A-Za-z])",
+            text,
+            re.IGNORECASE
+        ):
+            if language not in found:
+                found.append(language)
+
+    return ", ".join(found) if found else "Not listed"
+
 
 def find_platform(text):
-
     if not text:
         return None
 
-    text = str(text).lower()
+    normalized = clean_text(text).lower()
 
-    platforms = [
-
-        ("amazon prime video", "Prime Video"),
-        ("prime video", "Prime Video"),
-
-        ("jio hotstar", "Jio Hotstar"),
-        ("jiohotstar", "Jio Hotstar"),
-        ("disney plus hotstar", "Jio Hotstar"),
-        ("disney hotstar", "Jio Hotstar"),
-        ("hotstar", "Jio Hotstar"),
-
-        ("sony liv", "Sony LIV"),
-        ("sonyliv", "Sony LIV"),
-
-        ("zee5", "ZEE5"),
-        ("zee 5", "ZEE5"),
-
-        ("mx player", "MX Player"),
-        ("mxplayer", "MX Player"),
-
-        ("apple tv plus", "Apple TV+"),
-        ("apple tv", "Apple TV+"),
-
-        ("jio cinema", "JioCinema"),
-        ("jiocinema", "JioCinema"),
-
-        ("sun nxt", "Sun NXT"),
-        ("sunnxt", "Sun NXT"),
-
-        ("lionsgate play", "Lionsgate Play"),
-        ("discovery plus", "Discovery+"),
-
-        ("airtel xstream", "Airtel Xstream"),
-
-        ("manorama max", "Manorama MAX"),
-        ("shemaroo me", "Shemaroo Me"),
-        ("etv win", "ETV Win"),
-
-        ("alt balaji", "ALT Balaji"),
-
-        ("crunchyroll", "Crunchyroll"),
-
-        ("simply south", "Simply South"),
-        ("tentkotta", "Tentkotta"),
-
-        ("chaupal", "Chaupal"),
-        ("hoichoi", "Hoichoi"),
-
-        ("mubi", "Mubi"),
-        ("tubi", "Tubi"),
-        ("viki", "Viki"),
-        ("viu", "Viu"),
-        ("voot", "Voot"),
-        ("youtube", "YouTube"),
-
-        ("aha video", "aha"),
-        ("aha", "aha"),
-    ]
-
-    platforms.sort(
-        key=lambda x: len(x[0]),
-        reverse=True
+    normalized = normalized.replace(
+        "jiohotstar",
+        "jio hotstar"
     )
 
-    for alias, name in platforms:
-
-        if alias in text:
-            return name
+    for alias, display_name in sorted(
+        PLATFORMS,
+        key=lambda x: len(x[0]),
+        reverse=True
+    ):
+        if alias in normalized:
+            return display_name
 
     return None
 
 
-def extract_platform(element):
+# ============================================================
+# PLATFORM FROM DETAIL PAGE
+# ============================================================
 
-    if not element:
-        return "Not listed"
-
+def extract_detail_platform(soup):
     values = []
 
-    values.append(str(element))
+    # Image/logo attributes are usually the cleanest source.
+    for tag in soup.find_all(
+        ["img", "a", "button"]
+    ):
+        for attr in [
+            "alt",
+            "title",
+            "aria-label",
+            "data-platform",
+            "data-provider",
+            "data-service",
+        ]:
+            value = tag.get(attr)
 
-    values.append(
-        element.get_text(
-            " ",
-            strip=True
-        )
-    )
-
-    attributes = [
-        "alt",
-        "title",
-        "aria-label",
-        "class",
-        "id",
-        "src",
-        "href",
-        "data-platform",
-        "data-provider",
-        "data-service",
-        "data-network",
-    ]
-
-    for tag in element.find_all(True):
-
-        for attribute in attributes:
-
-            value = tag.get(
-                attribute
-            )
-
-            if isinstance(
-                value,
-                list
-            ):
+            if isinstance(value, list):
                 value = " ".join(
                     str(x)
                     for x in value
@@ -423,11 +430,20 @@ def extract_platform(element):
                     str(value)
                 )
 
-    for value in values:
-
-        platform = find_platform(
-            value
+    # Search visible page text, but only the beginning.
+    body_text = clean_text(
+        soup.get_text(
+            " ",
+            strip=True
         )
+    )
+
+    values.append(
+        body_text[:6000]
+    )
+
+    for value in values:
+        platform = find_platform(value)
 
         if platform:
             return platform
@@ -436,11 +452,106 @@ def extract_platform(element):
 
 
 # ============================================================
-# TITLE
+# SCRAPERAPI
 # ============================================================
 
-def clean_title(title):
+def scraperapi_fetch(
+    target_url,
+    render=False
+):
 
+    if not SCRAPER_API_KEY:
+        raise RuntimeError(
+            "SCRAPER_API_KEY secret is missing."
+        )
+
+    params = {
+        "api_key": SCRAPER_API_KEY,
+        "url": target_url,
+    }
+
+    if render:
+        params["render"] = "true"
+
+    response = requests.get(
+        "https://api.scraperapi.com/",
+        params=params,
+        timeout=180
+    )
+
+    print(
+        f"ScraperAPI HTTP status: "
+        f"{response.status_code}"
+    )
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"ScraperAPI returned HTTP "
+            f"{response.status_code}"
+        )
+
+    if not response.text:
+        raise RuntimeError(
+            "ScraperAPI returned empty content."
+        )
+
+    return response.text
+
+
+def fetch_binged_listing():
+    print(
+        "Fetching combined Binged filtered page..."
+    )
+
+    print(
+        BINGED_FILTERED_URL
+    )
+
+    # JS-rendered request is retained because this is the
+    # request that was previously returning the actual page.
+    html = scraperapi_fetch(
+        BINGED_FILTERED_URL,
+        render=True
+    )
+
+    print(
+        f"Returned content length: "
+        f"{len(html)}"
+    )
+
+    return html
+
+
+# ============================================================
+# FIND ACTUAL BINGED TITLE LINKS
+# ============================================================
+
+def is_content_link(href):
+    if not href:
+        return False
+
+    href_lower = href.lower()
+
+    if "binged.com" not in href_lower:
+        return False
+
+    # Current Binged title pages use the streaming-premiere-
+    # dates path followed by the title slug.
+    if "/streaming-premiere-dates/" not in href_lower:
+        return False
+
+    # Do not accept the listing page itself.
+    path = href_lower.split("?", 1)[0].rstrip("/")
+
+    if path.endswith(
+        "/streaming-premiere-dates"
+    ):
+        return False
+
+    return True
+
+
+def clean_title(title):
     title = clean_text(title)
 
     if not title:
@@ -451,7 +562,6 @@ def clean_title(title):
         key=len,
         reverse=True
     ):
-
         title = re.sub(
             rf"\s+{re.escape(rating)}$",
             "",
@@ -466,111 +576,16 @@ def clean_title(title):
         flags=re.IGNORECASE
     )
 
+    title = re.sub(
+        r"\s+\d{4}$",
+        "",
+        title
+    )
+
     return clean_text(title)
 
 
-# ============================================================
-# FIND TITLE LINKS
-# ============================================================
-
-def is_content_link(href):
-
-    if not href:
-        return False
-
-    href_lower = href.lower()
-
-    if "binged.com" not in href_lower:
-        return False
-
-    return any(
-        path in href_lower
-        for path in [
-            "/movie/",
-            "/tv-show/",
-            "/web-series/",
-            "/streaming-premiere-dates/",
-        ]
-    )
-
-
-def is_navigation_title(title):
-
-    return title.lower() in {
-        "view all",
-        "read more",
-        "streaming dates",
-        "filters",
-        "clear",
-        "home",
-        "reviews",
-        "news",
-        "ranked lists",
-        "next",
-        "previous",
-        "previous page",
-        "next page",
-    }
-
-
-# ============================================================
-# FIND BEST CONTAINER
-# ============================================================
-
-def find_best_container(anchor):
-
-    current = anchor
-
-    best = None
-
-    # Search substantially farther than the old
-    # five-parent limit.
-    for _ in range(12):
-
-        if not current:
-            break
-
-        text = clean_text(
-            current.get_text(
-                " ",
-                strip=True
-            )
-        )
-
-        has_date = bool(
-            re.search(
-                r"\b\d{1,2}\s+"
-                r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
-                r"\s+\d{4}\b",
-                text,
-                re.IGNORECASE
-            )
-        )
-
-        has_rating = bool(
-            re.search(
-                r"\b(?:Must Watch|Good|Satisfactory|Passable|Poor|Skip)\b",
-                text,
-                re.IGNORECASE
-            )
-        )
-
-        if has_date and has_rating:
-
-            if 20 <= len(text) <= 4000:
-                best = current
-                break
-
-        current = current.parent
-
-    return best or anchor.parent or anchor
-
-
-# ============================================================
-# PARSE BINGED PAGE
-# ============================================================
-
-def parse_cards(html):
+def find_listing_titles(html):
 
     soup = BeautifulSoup(
         html,
@@ -580,405 +595,381 @@ def parse_cards(html):
     cards = []
     used = set()
 
-    # ========================================================
-    # TITLE EXTRACTION
-    # This deliberately uses the simple method that worked
-    # earlier: scan headings and links for actual titles.
-    # ========================================================
-
-    excluded = {
-        "home",
-        "binged",
-        "streaming",
-        "streaming now",
-        "streaming soon",
-        "view all",
-        "read more",
-        "filters",
-        "clear",
-        "reviews",
-        "news",
-        "ranked lists",
-        "privacy policy",
-        "terms of use",
-        "skip ad",
-        "watch latest movies & web series on aha!",
-        "previous",
-        "next",
-        "next page",
-        "previous page",
-    }
-
-    for element in soup.find_all(
-        ["h1", "h2", "h3", "h4", "a"]
+    for anchor in soup.find_all(
+        "a",
+        href=True
     ):
 
+        href = anchor.get(
+            "href"
+        )
+
+        if not is_content_link(href):
+            continue
+
         raw_title = clean_text(
-            element.get_text(
+            anchor.get_text(
                 " ",
                 strip=True
             )
         )
 
-        if not raw_title:
+        title = clean_title(
+            raw_title
+        )
+
+        if not title:
             continue
 
-        title = clean_title(raw_title)
-
-        if len(title) < 2:
-            continue
-
-        if len(title) > 150:
+        if len(title) < 2 or len(title) > 150:
             continue
 
         lower = title.lower()
 
-        # Ignore navigation / website text.
+        excluded = {
+            "streaming dates",
+            "streaming now",
+            "streaming soon",
+            "view all",
+            "read more",
+            "contact",
+            "about us",
+            "privacy policy",
+            "terms of use",
+            "skip ad",
+        }
+
         if lower in excluded:
             continue
 
-        # Ignore rating names by themselves.
-        if lower in {
-            "must watch",
-            "good",
-            "satisfactory",
-            "passable",
-            "poor",
-            "skip",
-        }:
-            continue
-
-        # Ignore obvious filter labels.
-        if lower in {
-            "film",
-            "tv show",
-            "hindi",
-            "punjabi",
-            "telugu",
-            "tamil",
-            "malayalam",
-            "kannada",
-            "bengali",
-            "marathi",
-            "gujarati",
-            "english",
-            "urdu",
-        }:
-            continue
-
-        # Avoid duplicate titles.
         key = normal_key(title)
 
-        if not key:
+        if not key or key in used:
             continue
 
-        if key in used:
-            continue
+        # ----------------------------------------------------
+        # Get nearby listing text for release date.
+        # ----------------------------------------------------
 
-        # ====================================================
-        # We now look around the title for metadata.
-        # Metadata is OPTIONAL.
-        # ====================================================
+        listing_text = ""
 
-        container = element
+        container = anchor
 
-        # Move upward a few levels to find the release card.
-        for _ in range(8):
+        for _ in range(7):
 
             if not container:
                 break
 
-            text = clean_text(
+            candidate = clean_text(
                 container.get_text(
                     " ",
                     strip=True
                 )
             )
 
-            # A reasonable card normally contains some
-            # surrounding information.
-            if 20 <= len(text) <= 3000:
+            if 20 <= len(candidate) <= 3000:
 
-                rating = find_rating(text)
-                release_date = find_date(text)
+                listing_text = candidate
 
                 if (
-                    rating != "Not listed"
-                    or release_date != "Not listed"
+                    re.search(
+                        r"\b\d{1,2}\s+"
+                        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+                        r"\s+\d{4}\b",
+                        candidate,
+                        re.IGNORECASE
+                    )
                 ):
                     break
 
             container = container.parent
 
-        if not container:
-            container = element
+        cards.append({
+            "title": title,
+            "binged_link": urljoin(
+                BINGED_BASE,
+                href
+            ),
+            "listing_text": listing_text,
+            "release": find_date(
+                listing_text
+            ),
+        })
 
-        card_text = clean_text(
-            container.get_text(
+        used.add(key)
+
+        if len(cards) >= MAX_TITLES:
+            break
+
+    print(
+        f"Found {len(cards)} Binged title link(s)."
+    )
+
+    return cards
+
+
+# ============================================================
+# DETAIL PAGE PARSER
+# ============================================================
+
+def parse_detail_page(
+    html,
+    card
+):
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    full_text = clean_text(
+        soup.get_text(
+            " ",
+            strip=True
+        )
+    )
+
+    # --------------------------------------------------------
+    # TITLE
+    # --------------------------------------------------------
+
+    title = card["title"]
+
+    h1 = soup.find("h1")
+
+    if h1:
+        h1_title = clean_title(
+            h1.get_text(
                 " ",
                 strip=True
             )
         )
 
-        rating = find_rating(card_text)
-        release_date = find_date(card_text)
-        content_type = find_type(card_text)
-        genre = find_genres(card_text)
-        language = find_languages(card_text)
-        platform = extract_platform(container)
+        if h1_title:
+            title = h1_title
 
-        # ====================================================
-        # LINK
-        # ====================================================
+    # --------------------------------------------------------
+    # RATING
+    # --------------------------------------------------------
 
-        link = None
+    rating = find_rating(
+        full_text
+    )
 
-        if element.name == "a":
-            link = element.get("href")
+    # Prefer explicit "Binged Rating".
+    rating_match = re.search(
+        r"Binged\s+Rating\s+"
+        r"(Must\s+Watch|Good|Satisfactory|Passable|Poor|Skip)",
+        full_text,
+        re.IGNORECASE
+    )
 
-        if not link:
-            anchor = container.find(
-                "a",
-                href=True
-            )
-
-            if anchor:
-                link = anchor.get("href")
-
-        if not link:
-            link = BINGED_BASE
-
-        binged_link = urljoin(
-            BINGED_BASE,
-            link
+    if rating_match:
+        rating = clean_text(
+            rating_match.group(1)
         )
 
-        # ====================================================
-        # IMPORTANT:
-        # Do NOT reject the title because metadata is missing.
-        # ====================================================
+        if rating.lower() == "must watch":
+            rating = "Must Watch"
 
-        card = {
-            "title": title,
-            "rating": rating,
-            "date": release_date,
-            "date_object": parse_date(
-                release_date
-            ),
-            "type": content_type,
-            "genre": genre,
-            "language": language,
-            "platform": platform,
-            "binged_link": binged_link,
-        }
+    # --------------------------------------------------------
+    # TYPE
+    # --------------------------------------------------------
 
-        cards.append(card)
-        used.add(key)
+    content_type = find_type(
+        full_text
+    )
 
-    # ========================================================
-    # Remove obvious false positives after extraction.
-    # ========================================================
+    # --------------------------------------------------------
+    # RELEASE
+    # --------------------------------------------------------
 
-    bad_titles = {
-        "streaming now",
-        "streaming soon",
-        "skip ad",
-        "watch latest movies & web series on aha!",
-        "latest",
-        "movies",
-        "tv shows",
-        "films",
-        "web series",
+    release = card.get(
+        "release",
+        "Not listed"
+    )
+
+    # The listing date is preferred because that is the exact
+    # OTT release date shown by the filtered streaming page.
+    if release == "Not listed":
+        release = find_date(
+            full_text
+        )
+
+    # --------------------------------------------------------
+    # GENRE + LANGUAGE
+    # --------------------------------------------------------
+
+    # The information before "Binged Rating" normally contains
+    # the title metadata: genre and language.
+    rating_position = full_text.lower().find(
+        "binged rating"
+    )
+
+    if rating_position >= 0:
+        metadata_text = full_text[
+            max(0, rating_position - 1500):
+            rating_position
+        ]
+    else:
+        metadata_text = full_text[:3000]
+
+    genre = find_genres(
+        metadata_text
+    )
+
+    language = find_languages(
+        metadata_text
+    )
+
+    # --------------------------------------------------------
+    # PLATFORM
+    # --------------------------------------------------------
+
+    platform = extract_detail_platform(
+        soup
+    )
+
+    # If no platform was found from logo/attributes, search
+    # for platform names in the page text before the cast/plot.
+    if platform == "Not listed":
+
+        platform = find_platform(
+            full_text[:5000]
+        )
+
+    return {
+        "title": title,
+        "rating": rating,
+        "release": release,
+        "type": content_type,
+        "genre": genre,
+        "language": language,
+        "platform": platform,
+        "binged_link": card[
+            "binged_link"
+        ],
     }
 
-    cards = [
-        card
-        for card in cards
-        if card["title"].lower()
-        not in bad_titles
-    ]
 
-    # Newest dates first where dates are available.
-    cards.sort(
-        key=lambda card: (
-            card["date_object"]
-            or datetime.min
-        ),
-        reverse=True
-    )
+# ============================================================
+# FETCH ONE TITLE'S DETAILS
+# ============================================================
+
+def enrich_card(card):
 
     print(
-        f"Extracted {len(cards)} title(s)"
+        f"Fetching details: "
+        f"{card['title']}"
     )
 
-    return cards
+    # First try without JS rendering.
+    # This is faster and cheaper.
+    try:
 
-# ============================================================
-# SCRAPERAPI
-# ============================================================
-
-def fetch_binged():
-
-    if not SCRAPER_API_KEY:
-
-        raise RuntimeError(
-            "SCRAPER_API_KEY secret is missing."
+        html = scraperapi_fetch(
+            card["binged_link"],
+            render=False
         )
 
-    attempts = [
+        result = parse_detail_page(
+            html,
+            card
+        )
 
-        # First attempt: normal request.
-        {
-            "name": "normal",
-            "params": {
-                "api_key": SCRAPER_API_KEY,
-                "url": BINGED_URL,
-                "device_type": "desktop",
-            },
-        },
+        # If useful fields were found, use them.
+        useful = (
+            result["rating"] != "Not listed"
+            or result["genre"] != "Not listed"
+            or result["language"] != "Not listed"
+            or result["platform"] != "Not listed"
+        )
 
-        # Second: JS rendering.
-        {
-            "name": "render",
-            "params": {
-                "api_key": SCRAPER_API_KEY,
-                "url": BINGED_URL,
-                "render": "true",
-                "device_type": "desktop",
-            },
-        },
+        if useful:
+            return result
 
-        # Third: premium + rendering.
-        {
-            "name": "premium-render",
-            "params": {
-                "api_key": SCRAPER_API_KEY,
-                "url": BINGED_URL,
-                "render": "true",
-                "premium": "true",
-                "device_type": "desktop",
-            },
-        },
-    ]
-
-    last_error = (
-        "Could not fetch Binged."
-    )
-
-    for attempt in attempts:
+    except Exception as exc:
 
         print(
-            f"Trying ScraperAPI: "
-            f"{attempt['name']}"
+            f"Normal detail request failed: "
+            f"{exc}"
         )
 
-        try:
+    # --------------------------------------------------------
+    # Fallback: JS-rendered detail page.
+    # --------------------------------------------------------
 
-            response = requests.get(
-                "https://api.scraperapi.com/",
-                params=attempt["params"],
-                timeout=120
-            )
+    try:
 
-            print(
-                "ScraperAPI HTTP status: "
-                f"{response.status_code}"
-            )
+        html = scraperapi_fetch(
+            card["binged_link"],
+            render=True
+        )
 
-            print(
-                "Returned content length: "
-                f"{len(response.text)}"
-            )
+        return parse_detail_page(
+            html,
+            card
+        )
 
-            if response.status_code != 200:
+    except Exception as exc:
 
-                last_error = (
-                    "ScraperAPI returned HTTP "
-                    f"{response.status_code}"
-                )
+        print(
+            f"Rendered detail request failed: "
+            f"{exc}"
+        )
 
-                continue
-
-            html = response.text
-
-            lower = html[:50000].lower()
-
-            blocked_phrases = [
-                "access denied",
-                "<title>forbidden</title>",
-                "verify you are human",
-                "checking your browser",
-                "just a moment",
-                "cf-chl",
-            ]
-
-            if any(
-                phrase in lower
-                for phrase in blocked_phrases
-            ):
-
-                print(
-                    "Binged returned a "
-                    "block/verification page."
-                )
-
-                last_error = (
-                    "Binged returned a "
-                    "verification/block page."
-                )
-
-                continue
-
-            print(
-                "Binged page fetched successfully."
-            )
-
-            return html
-
-        except Exception as exc:
-
-            print(
-                f"ScraperAPI request failed: "
-                f"{exc}"
-            )
-
-            last_error = str(exc)
-
-        time.sleep(2)
-
-    raise RuntimeError(
-        last_error
-    )
+        return {
+            "title": card["title"],
+            "rating": "Not listed",
+            "release": card.get(
+                "release",
+                "Not listed"
+            ),
+            "type": "Not listed",
+            "genre": "Not listed",
+            "language": "Not listed",
+            "platform": "Not listed",
+            "binged_link": card[
+                "binged_link"
+            ],
+        }
 
 
 # ============================================================
-# FETCH CARDS
+# FETCH LATEST RELEASES
 # ============================================================
 
-def fetch_cards():
+def fetch_latest():
 
-    print(
-        "Fetching combined Binged filtered page..."
-    )
+    html = fetch_binged_listing()
 
-    print(
-        BINGED_URL
-    )
-
-    html = fetch_binged()
-
-    cards = parse_cards(
+    cards = find_listing_titles(
         html
     )
 
     if not cards:
-
         raise RuntimeError(
             "Binged page was fetched successfully "
-            "but no titles could be extracted."
+            "but no title links could be extracted."
         )
 
-    return cards
+    enriched = []
+
+    for card in cards:
+
+        enriched_card = enrich_card(
+            card
+        )
+
+        enriched.append(
+            enriched_card
+        )
+
+        time.sleep(
+            DETAIL_DELAY
+        )
+
+    return enriched
 
 
 # ============================================================
@@ -998,37 +989,6 @@ def stremio_link(title):
 
 
 # ============================================================
-# TELEGRAM KEYBOARD
-# ============================================================
-
-def make_keyboard(card):
-
-    return {
-        "inline_keyboard": [
-
-            [
-                {
-                    "text": "▶ Open Stremio",
-                    "url": stremio_link(
-                        card["title"]
-                    ),
-                }
-            ],
-
-            [
-                {
-                    "text": "🔗 Open on Binged",
-                    "url": card[
-                        "binged_link"
-                    ],
-                }
-            ],
-
-        ]
-    }
-
-
-# ============================================================
 # TELEGRAM MESSAGE
 # ============================================================
 
@@ -1037,7 +997,7 @@ def make_message(card):
     return (
         f"🎬 {card['title']}\n"
         f"⭐ Rating: {card['rating']}\n"
-        f"📅 Release: {card['date']}\n"
+        f"📅 Release: {card['release']}\n"
         f"🎞 Type: {card['type']}\n"
         f"🎭 Genre: {card['genre']}\n"
         f"🗣 Language: {card['language']}\n"
@@ -1045,17 +1005,39 @@ def make_message(card):
     )
 
 
+def make_keyboard(card):
+
+    return {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "▶ Open in Stremio",
+                    "url": stremio_link(
+                        card["title"]
+                    ),
+                },
+                {
+                    "text": "🔗 Open on Binged",
+                    "url": card[
+                        "binged_link"
+                    ],
+                },
+            ]
+        ]
+    }
+
+
 # ============================================================
 # TELEGRAM API
 # ============================================================
 
-def telegram_request(
+def telegram_api(
     method,
-    params=None
+    params=None,
+    post=False
 ):
 
     if not TELEGRAM_BOT_TOKEN:
-
         raise RuntimeError(
             "TELEGRAM_BOT_TOKEN secret is missing."
         )
@@ -1066,18 +1048,24 @@ def telegram_request(
         f"{method}"
     )
 
-    response = requests.get(
-        url,
-        params=params or {},
-        timeout=30
-    )
+    if post:
+        response = requests.post(
+            url,
+            data=params or {},
+            timeout=30
+        )
+    else:
+        response = requests.get(
+            url,
+            params=params or {},
+            timeout=30
+        )
 
     response.raise_for_status()
 
     data = response.json()
 
     if not data.get("ok"):
-
         raise RuntimeError(
             f"Telegram API error: {data}"
         )
@@ -1098,14 +1086,15 @@ def send_telegram(
     }
 
     if keyboard:
-
         params["reply_markup"] = json.dumps(
-            keyboard
+            keyboard,
+            ensure_ascii=False
         )
 
-    telegram_request(
+    telegram_api(
         "sendMessage",
-        params
+        params,
+        post=True
     )
 
 
@@ -1116,109 +1105,309 @@ def send_telegram(
 def register_commands():
 
     commands = [
-
         {
             "command": "start",
             "description": "Start Binged OTT Tracker",
         },
-
         {
             "command": "help",
             "description": "Show all available commands",
         },
-
         {
             "command": "latest",
             "description": "Latest filtered OTT releases",
         },
-
         {
             "command": "today",
             "description": "Today's OTT releases",
         },
-
         {
             "command": "movies",
             "description": "Latest Hindi Punjabi movies",
         },
-
         {
             "command": "shows",
             "description": "Latest Hindi Punjabi TV shows",
         },
-
         {
             "command": "hindi",
             "description": "Latest Hindi releases",
         },
-
         {
             "command": "punjabi",
             "description": "Latest Punjabi releases",
         },
-
         {
             "command": "mustwatch",
             "description": "Must Watch releases",
         },
-
         {
             "command": "good",
             "description": "Good rated releases",
         },
-
         {
             "command": "satisfactory",
             "description": "Satisfactory releases",
         },
-
         {
             "command": "passable",
             "description": "Passable releases",
         },
-
         {
             "command": "poor",
             "description": "Poor rated releases",
         },
-
         {
             "command": "skip",
             "description": "Skip rated releases",
         },
-
         {
             "command": "all",
             "description": "All filtered releases",
         },
-
         {
             "command": "refresh",
             "description": "Check Binged for new releases",
         },
-
         {
             "command": "status",
             "description": "Show tracker status",
         },
-
         {
             "command": "filters",
             "description": "Show active Binged filters",
         },
     ]
 
-    telegram_request(
-        "setMyCommands",
-        {
-            "commands": json.dumps(
-                commands
+    try:
+
+        telegram_api(
+            "setMyCommands",
+            {
+                "commands": json.dumps(
+                    commands
+                )
+            },
+            post=True
+        )
+
+        print(
+            "Telegram command menu registered."
+        )
+
+    except Exception as exc:
+
+        print(
+            f"Could not register Telegram "
+            f"commands: {exc}"
+        )
+
+
+# ============================================================
+# TELEGRAM OFFSET
+# ============================================================
+
+def load_offset():
+
+    if not os.path.exists(
+        OFFSET_FILE
+    ):
+        return 0
+
+    try:
+
+        with open(
+            OFFSET_FILE,
+            "r",
+            encoding="utf-8"
+        ) as file:
+
+            data = json.load(
+                file
             )
-        }
+
+        return int(
+            data.get(
+                "offset",
+                0
+            )
+        )
+
+    except Exception:
+        return 0
+
+
+def save_offset(offset):
+
+    with open(
+        OFFSET_FILE,
+        "w",
+        encoding="utf-8"
+    ) as file:
+
+        json.dump(
+            {
+                "offset": offset
+            },
+            file
+        )
+
+
+# ============================================================
+# GET TELEGRAM COMMAND
+# ============================================================
+
+def get_recent_command():
+
+    offset = load_offset()
+
+    try:
+
+        result = telegram_api(
+            "getUpdates",
+            {
+                "offset": offset,
+                "limit": 20,
+                "timeout": 0,
+                "allowed_updates": json.dumps(
+                    ["message"]
+                ),
+            }
+        )
+
+    except Exception as exc:
+
+        print(
+            f"Telegram getUpdates error: "
+            f"{exc}"
+        )
+
+        return None
+
+    updates = result.get(
+        "result",
+        []
     )
 
-    print(
-        "Telegram command menu registered."
+    if not updates:
+        return None
+
+    now = int(
+        time.time()
+    )
+
+    selected = None
+
+    for update in updates:
+
+        update_id = update.get(
+            "update_id"
+        )
+
+        if update_id is not None:
+            save_offset(
+                int(update_id) + 1
+            )
+
+        message = update.get(
+            "message"
+        )
+
+        if not message:
+            continue
+
+        text = clean_text(
+            message.get(
+                "text",
+                ""
+            )
+        )
+
+        if not text:
+            continue
+
+        command = text.lower().split(
+            "@",
+            1
+        )[0]
+
+        if command not in COMMANDS:
+            continue
+
+        message_date = int(
+            message.get(
+                "date",
+                0
+            )
+        )
+
+        if (
+            now - message_date
+            > COMMAND_MAX_AGE
+        ):
+            continue
+
+        selected = message
+
+    if selected:
+        print(
+            "Telegram command received: "
+            f"{selected.get('text')}"
+        )
+
+    return selected
+
+
+# ============================================================
+# HELP
+# ============================================================
+
+def send_help(chat_id):
+
+    text = (
+        "🤖 Binged OTT Tracker\n\n"
+        "/latest - Latest filtered OTT releases\n"
+        "/today - Today's OTT releases\n"
+        "/movies - Latest Hindi Punjabi movies\n"
+        "/shows - Latest Hindi Punjabi TV shows\n"
+        "/hindi - Latest Hindi releases\n"
+        "/punjabi - Latest Punjabi releases\n"
+        "/mustwatch - Must Watch releases\n"
+        "/good - Good rated releases\n"
+        "/satisfactory - Satisfactory releases\n"
+        "/passable - Passable releases\n"
+        "/poor - Poor rated releases\n"
+        "/skip - Skip rated releases\n"
+        "/all - All filtered releases\n"
+        "/refresh - Check Binged for new releases\n"
+        "/status - Show tracker status\n"
+        "/filters - Show active Binged filters"
+    )
+
+    send_telegram(
+        chat_id,
+        text
+    )
+
+
+# ============================================================
+# FILTERS
+# ============================================================
+
+def send_filters(chat_id):
+
+    text = (
+        "🔎 Active Binged filters\n\n"
+        "Category: Film + TV Show\n"
+        "Language: Hindi + Punjabi\n"
+        "Mode: Streaming Now\n"
+        "Rating: Must Watch + Good + "
+        "Satisfactory + Passable + Poor + Skip"
+    )
+
+    send_telegram(
+        chat_id,
+        text
     )
 
 
@@ -1249,7 +1438,6 @@ def load_seen():
             data,
             list
         ):
-
             return set(
                 str(x)
                 for x in data
@@ -1258,7 +1446,7 @@ def load_seen():
     except Exception as exc:
 
         print(
-            f"Could not read seen file: "
+            f"Could not load seen titles: "
             f"{exc}"
         )
 
@@ -1282,203 +1470,6 @@ def save_seen(seen):
 
 
 # ============================================================
-# TELEGRAM COMMAND READER
-# ============================================================
-
-def get_command():
-
-    # Make sure Telegram is using polling.
-    telegram_request(
-        "deleteWebhook",
-        {
-            "drop_pending_updates": "false"
-        }
-    )
-
-    result = telegram_request(
-        "getUpdates",
-        {
-            "limit": 50,
-            "timeout": 0,
-            "allowed_updates": json.dumps(
-                ["message"]
-            ),
-        }
-    )
-
-    updates = result.get(
-        "result",
-        []
-    )
-
-    if not updates:
-        return None
-
-    now = int(
-        time.time()
-    )
-
-    latest_command = None
-
-    for update in updates:
-
-        message = update.get(
-            "message"
-        )
-
-        if not message:
-            continue
-
-        text = clean_text(
-            message.get(
-                "text",
-                ""
-            )
-        )
-
-        if not text:
-            continue
-
-        command = text.lower()
-
-        command = command.split(
-            "@",
-            1
-        )[0]
-
-        if command not in COMMANDS:
-            continue
-
-        message_date = int(
-            message.get(
-                "date",
-                0
-            )
-        )
-
-        age = now - message_date
-
-        if 0 <= age <= COMMAND_MAX_AGE:
-
-            latest_command = message
-
-    return latest_command
-
-
-# ============================================================
-# FILTERING
-# ============================================================
-
-def filter_cards(
-    cards,
-    mode
-):
-
-    if mode == "mustwatch":
-
-        return [
-            card for card in cards
-            if card["rating"].lower()
-            == "must watch"
-        ]
-
-    if mode == "good":
-
-        return [
-            card for card in cards
-            if card["rating"].lower()
-            == "good"
-        ]
-
-    if mode == "satisfactory":
-
-        return [
-            card for card in cards
-            if card["rating"].lower()
-            == "satisfactory"
-        ]
-
-    if mode == "passable":
-
-        return [
-            card for card in cards
-            if card["rating"].lower()
-            == "passable"
-        ]
-
-    if mode == "poor":
-
-        return [
-            card for card in cards
-            if card["rating"].lower()
-            == "poor"
-        ]
-
-    if mode == "skip":
-
-        return [
-            card for card in cards
-            if card["rating"].lower()
-            == "skip"
-        ]
-
-    if mode == "movies":
-
-        return [
-            card for card in cards
-            if card["type"].lower()
-            == "film"
-        ]
-
-    if mode == "shows":
-
-        return [
-            card for card in cards
-            if card["type"].lower()
-            == "tv show"
-        ]
-
-    if mode == "hindi":
-
-        return [
-            card for card in cards
-            if re.search(
-                r"\bHindi\b",
-                card["language"],
-                re.IGNORECASE
-            )
-        ]
-
-    if mode == "punjabi":
-
-        return [
-            card for card in cards
-            if re.search(
-                r"\bPunjabi\b",
-                card["language"],
-                re.IGNORECASE
-            )
-        ]
-
-    if mode == "today":
-
-        today = datetime.now(
-            IST
-        ).date()
-
-        return [
-            card for card in cards
-            if (
-                card["date_object"]
-                and card["date_object"].date()
-                == today
-            )
-        ]
-
-    return cards
-
-
-# ============================================================
 # SEND CARDS
 # ============================================================
 
@@ -1497,7 +1488,7 @@ def send_cards(
 
         send_telegram(
             chat_id,
-            "No matching titles found."
+            "No matching releases found."
         )
 
         return
@@ -1511,7 +1502,7 @@ def send_cards(
         )
 
         time.sleep(
-            0.1
+            0.2
         )
 
     send_telegram(
@@ -1521,59 +1512,95 @@ def send_cards(
 
 
 # ============================================================
-# HELP
+# FILTER CARDS
 # ============================================================
 
-def help_text():
-
-    return (
-        "📋 Available commands:\n\n"
-
-        "/start - Start Binged OTT Tracker\n"
-        "/help - Show all available commands\n"
-        "/latest - Latest filtered OTT releases\n"
-        "/today - Today's OTT releases\n"
-        "/movies - Latest Hindi Punjabi movies\n"
-        "/shows - Latest Hindi Punjabi TV shows\n"
-        "/hindi - Latest Hindi releases\n"
-        "/punjabi - Latest Punjabi releases\n"
-        "/mustwatch - Must Watch releases\n"
-        "/good - Good rated releases\n"
-        "/satisfactory - Satisfactory releases\n"
-        "/passable - Passable releases\n"
-        "/poor - Poor rated releases\n"
-        "/skip - Skip rated releases\n"
-        "/all - All filtered releases\n"
-        "/refresh - Check Binged for new releases\n"
-        "/status - Show tracker status\n"
-        "/filters - Show active Binged filters"
-    )
-
-
-# ============================================================
-# FILTERS
-# ============================================================
-
-def filters_text():
-
-    return (
-        "🔎 Active Binged filters:\n\n"
-        "Category: Film + TV Show\n"
-        "Language: Hindi + Punjabi\n"
-        "Mode: Streaming Now\n"
-        "Ratings: Must Watch, Good, Satisfactory, "
-        "Passable, Poor, Skip"
-    )
-
-
-# ============================================================
-# HANDLE COMMAND
-# ============================================================
-
-def handle_command(
-    message,
+def filter_cards(
+    cards,
     command
 ):
+
+    if command == "latest":
+        return cards
+
+    if command == "all":
+        return cards
+
+    if command == "movies":
+        return [
+            card for card in cards
+            if card["type"].lower() == "film"
+        ]
+
+    if command == "shows":
+        return [
+            card for card in cards
+            if card["type"].lower() == "tv show"
+        ]
+
+    if command == "hindi":
+        return [
+            card for card in cards
+            if "hindi" in card["language"].lower()
+        ]
+
+    if command == "punjabi":
+        return [
+            card for card in cards
+            if "punjabi" in card["language"].lower()
+        ]
+
+    if command in {
+        "mustwatch",
+        "good",
+        "satisfactory",
+        "passable",
+        "poor",
+        "skip",
+    }:
+
+        target = {
+            "mustwatch": "must watch",
+            "good": "good",
+            "satisfactory": "satisfactory",
+            "passable": "passable",
+            "poor": "poor",
+            "skip": "skip",
+        }[command]
+
+        return [
+            card for card in cards
+            if card["rating"].lower()
+            == target
+        ]
+
+    if command == "today":
+
+        today = datetime.now(
+            IST
+        ).date()
+
+        result = []
+
+        for card in cards:
+
+            parsed = parse_date(
+                card["release"]
+            )
+
+            if parsed and parsed.date() == today:
+                result.append(card)
+
+        return result
+
+    return cards
+
+
+# ============================================================
+# COMMAND HANDLER
+# ============================================================
+
+def handle_command(message):
 
     chat_id = message[
         "chat"
@@ -1581,107 +1608,65 @@ def handle_command(
         "id"
     ]
 
-    mode = COMMANDS.get(
-        command
-    )
+    command = clean_text(
+        message.get(
+            "text",
+            ""
+        )
+    ).lower().split(
+        "@",
+        1
+    )[0].lstrip("/")
 
-    print(
-        f"Telegram command received: "
-        f"{command}"
-    )
-
-    # --------------------------------------------------------
-    # START
-    # --------------------------------------------------------
-
-    if mode == "start":
+    if command == "start":
 
         send_telegram(
             chat_id,
-            "🎬 Binged OTT Tracker is active.\n\n"
-            + help_text()
+            "🤖 Binged OTT Tracker is active.\n\n"
+            "Use /help to see all commands."
         )
 
         return
 
-    # --------------------------------------------------------
-    # HELP
-    # --------------------------------------------------------
+    if command == "help":
 
-    if mode == "help":
-
-        send_telegram(
-            chat_id,
-            help_text()
+        send_help(
+            chat_id
         )
 
         return
 
-    # --------------------------------------------------------
-    # FILTERS
-    # --------------------------------------------------------
+    if command == "filters":
 
-    if mode == "filters":
-
-        send_telegram(
-            chat_id,
-            filters_text()
+        send_filters(
+            chat_id
         )
 
         return
 
-    # --------------------------------------------------------
-    # STATUS
-    # --------------------------------------------------------
-
-    if mode == "status":
+    if command == "status":
 
         seen = load_seen()
 
         send_telegram(
             chat_id,
-            "📊 Tracker status\n\n"
-            f"Seen titles: {len(seen)}\n"
-            "Schedule: Every 5 minutes\n"
-            "Binged source: Active\n"
-            f"Checked: "
-            f"{datetime.now(IST).strftime('%d %b %Y, %I:%M %p')} IST"
+            "📊 Binged OTT Tracker\n\n"
+            f"Previously sent titles: {len(seen)}\n"
+            "Source: Binged\n"
+            "Filters: Hindi + Punjabi / Film + TV Show\n"
+            "Mode: Streaming Now"
         )
 
         return
 
-    # --------------------------------------------------------
-    # BINGED FETCH
-    # --------------------------------------------------------
-
-    send_telegram(
-        chat_id,
-        "🔄 Fetching Binged releases..."
-    )
-
-    try:
-
-        cards = fetch_cards()
-
-    except Exception as exc:
-
-        print(
-            f"Binged fetch error: {exc}"
-        )
+    if command == "refresh":
 
         send_telegram(
             chat_id,
-            "❌ Could not fetch Binged right now.\n\n"
-            f"{exc}"
+            "🔄 Fetching Binged releases..."
         )
 
-        return
-
-    # --------------------------------------------------------
-    # REFRESH
-    # --------------------------------------------------------
-
-    if mode == "refresh":
+        cards = fetch_latest()
 
         seen = load_seen()
 
@@ -1699,120 +1684,97 @@ def handle_command(
                     card
                 )
 
-        if not new_cards:
+                seen.add(key)
+
+        save_seen(
+            seen
+        )
+
+        if new_cards:
+
+            send_cards(
+                chat_id,
+                new_cards,
+                "🆕 NEW BINGED RELEASES"
+            )
+
+        else:
 
             send_telegram(
                 chat_id,
-                "✅ Binged checked.\n"
-                "No new releases found."
+                "✅ No new releases found."
             )
 
-            return
+        return
 
-        for card in new_cards:
-
-            send_telegram(
-                chat_id,
-                make_message(card),
-                make_keyboard(card)
-            )
-
-            time.sleep(
-                0.1
-            )
+    if command in {
+        "latest",
+        "today",
+        "movies",
+        "shows",
+        "hindi",
+        "punjabi",
+        "mustwatch",
+        "good",
+        "satisfactory",
+        "passable",
+        "poor",
+        "skip",
+        "all",
+    }:
 
         send_telegram(
             chat_id,
-            f"✅ {len(new_cards)} new title(s) found."
+            "🔄 Fetching Binged releases..."
+        )
+
+        cards = fetch_latest()
+
+        filtered = filter_cards(
+            cards,
+            command
+        )
+
+        headings = {
+            "latest": "🎬 LATEST — FILTERED BINGED RESULTS",
+            "today": "📅 TODAY'S OTT RELEASES",
+            "movies": "🎬 LATEST HINDI / PUNJABI MOVIES",
+            "shows": "📺 LATEST HINDI / PUNJABI TV SHOWS",
+            "hindi": "🇮🇳 LATEST HINDI RELEASES",
+            "punjabi": "🇮🇳 LATEST PUNJABI RELEASES",
+            "mustwatch": "⭐ MUST WATCH",
+            "good": "⭐ GOOD",
+            "satisfactory": "⭐ SATISFACTORY",
+            "passable": "⭐ PASSABLE",
+            "poor": "⭐ POOR",
+            "skip": "⭐ SKIP",
+            "all": "🎬 ALL FILTERED RELEASES",
+        }
+
+        send_cards(
+            chat_id,
+            filtered,
+            headings[command]
         )
 
         return
 
-    # --------------------------------------------------------
-    # FILTER
-    # --------------------------------------------------------
-
-    result = filter_cards(
-        cards,
-        mode
-    )
-
-    headings = {
-
-        "latest":
-            "🎬 LATEST — FILTERED BINGED RESULTS",
-
-        "today":
-            "📅 TODAY'S OTT RELEASES",
-
-        "movies":
-            "🎬 LATEST HINDI + PUNJABI MOVIES",
-
-        "shows":
-            "📺 LATEST HINDI + PUNJABI TV SHOWS",
-
-        "hindi":
-            "🗣 HINDI RELEASES",
-
-        "punjabi":
-            "🗣 PUNJABI RELEASES",
-
-        "mustwatch":
-            "⭐ MUST WATCH RELEASES",
-
-        "good":
-            "⭐ GOOD RELEASES",
-
-        "satisfactory":
-            "⭐ SATISFACTORY RELEASES",
-
-        "passable":
-            "⭐ PASSABLE RELEASES",
-
-        "poor":
-            "⭐ POOR RELEASES",
-
-        "skip":
-            "⭐ SKIP RELEASES",
-
-        "all":
-            "🎬 ALL FILTERED RELEASES",
-    }
-
-    heading = headings.get(
-        mode,
-        "🎬 BINGED RELEASES"
-    )
-
-    send_cards(
-        chat_id,
-        result,
-        heading
+    send_help(
+        chat_id
     )
 
 
 # ============================================================
-# AUTOMATIC UPDATE
+# AUTOMATIC HOURLY / SCHEDULED UPDATE
 # ============================================================
 
 def automatic_update():
 
     print(
-        "Checking latest Binged page..."
+        "Fetching Binged releases..."
     )
 
-    try:
-
-        cards = fetch_cards()
-
-    except Exception as exc:
-
-        print(
-            f"Automatic update skipped: "
-            f"{exc}"
-        )
-
-        return
+    cards = fetch_latest()
 
     seen = load_seen()
 
@@ -1830,35 +1792,19 @@ def automatic_update():
         if key in seen:
             continue
 
-        print(
-            f"New title: "
-            f"{card['title']}"
+        send_telegram(
+            TELEGRAM_CHAT_ID,
+            make_message(card),
+            make_keyboard(card)
         )
 
-        try:
+        seen.add(key)
 
-            send_telegram(
-                TELEGRAM_CHAT_ID,
-                make_message(card),
-                make_keyboard(card)
-            )
+        new_count += 1
 
-            seen.add(
-                key
-            )
-
-            new_count += 1
-
-            time.sleep(
-                0.1
-            )
-
-        except Exception as exc:
-
-            print(
-                f"Telegram send failed: "
-                f"{exc}"
-            )
+        time.sleep(
+            0.2
+        )
 
     save_seen(
         seen
@@ -1881,7 +1827,6 @@ def automatic_update():
 
 def run():
 
-    print("")
     print(
         "========================================"
     )
@@ -1907,74 +1852,41 @@ def run():
             "TELEGRAM_CHAT_ID secret is missing."
         )
 
-    # --------------------------------------------------------
-    # Register command menu.
-    # --------------------------------------------------------
+    register_commands()
 
-    try:
-
-        register_commands()
-
-    except Exception as exc:
-
-        print(
-            f"Command menu registration failed: "
-            f"{exc}"
-        )
-
-    # --------------------------------------------------------
-    # Check Telegram.
-    # --------------------------------------------------------
-
-    try:
-
-        command_message = get_command()
-
-    except Exception as exc:
-
-        print(
-            f"Telegram command check failed: "
-            f"{exc}"
-        )
-
-        command_message = None
-
-    # --------------------------------------------------------
-    # Process command.
-    # --------------------------------------------------------
+    command_message = get_recent_command()
 
     if command_message:
 
-        raw_text = clean_text(
-            command_message.get(
-                "text",
-                ""
-            )
-        ).lower()
-
-        command = raw_text.split(
-            "@",
-            1
-        )[0]
-
         handle_command(
-            command_message,
-            command
+            command_message
         )
 
         return
 
-    # --------------------------------------------------------
-    # No command.
-    # Automatic check.
-    # --------------------------------------------------------
-
     automatic_update()
 
 
-# ============================================================
-# START
-# ============================================================
-
 if __name__ == "__main__":
-    run()
+
+    try:
+
+        run()
+
+    except Exception as exc:
+
+        print("")
+        print(
+            "========================================"
+        )
+        print(
+            "ERROR"
+        )
+        print(
+            "========================================"
+        )
+        print(
+            str(exc)
+        )
+
+        raise
