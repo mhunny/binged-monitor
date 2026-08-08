@@ -61,6 +61,10 @@ def get_tmdb_data(title):
     return "N/A", None
 
 def send_telegram(text, poster_url=None):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Missing Telegram secrets in env variables.")
+        return False
+        
     if poster_url:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
         payload = {
