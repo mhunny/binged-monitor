@@ -1020,75 +1020,57 @@ def parse_cards(html):
 
 
 # ============================================================
-# STREMIO
+# STREMIO + TELEGRAM BUTTONS + MESSAGE
 # ============================================================
 
-def stremio_app_link(
-    title
-):
-
+def stremio_app_link(title):
+    """
+    Native Stremio Android/Desktop deep link.
+    This is displayed as text because Telegram URL buttons
+    require a supported URL scheme.
+    """
     return (
         "stremio:///search?search="
-        + quote(
-            title,
-            safe=""
-        )
+        + quote(title, safe="")
     )
 
 
-def stremio_web_link(
-    title
-):
-
+def stremio_web_link(title):
+    """
+    Stremio Web search.
+    This is used for the clickable Telegram button.
+    """
     return (
         "https://web.stremio.com/"
         "#/search?search="
-        + quote(
-            title,
-            safe=""
-        )
+        + quote(title, safe="")
     )
 
 
-# ============================================================
-# TELEGRAM BUTTONS
-# ============================================================
+def make_keyboard(card):
 
-def make_keyboard(
-    card
-):
-
-    title = card[
-        "title"
-    ]
+    title = card["title"]
 
     return {
         "inline_keyboard": [
+
             [
                 {
                     "text": "▶ Open Stremio Web",
-                    "url": stremio_web_link(
-                        title
-                    )
+                    "url": stremio_web_link(title)
                 },
+
                 {
-                    "text": "🔗 Binged",
-                    "url": card[
-                        "binged_link"
-                    ]
+                    "text": "🔗 Open on Binged",
+                    "url": card["binged_link"]
                 }
             ]
+
         ]
     }
 
 
-# ============================================================
-# TELEGRAM MESSAGE
-# ============================================================
-
-def make_message(
-    card
-):
+def make_message(card):
 
     app_link = stremio_app_link(
         card["title"]
@@ -1102,12 +1084,14 @@ def make_message(
         f"🎭 Genre: {card['genre']}\n"
         f"🗣 Language: {card['language']}\n"
         f"📺 Platform: {card['platform']}\n\n"
-        f"📱 Stremio App Link:\n"
-        f"{app_link}\n\n"
-        f"Use the button below for Stremio Web."
+        f"📱 Stremio App Deep Link:\n"
+        f"{app_link}"
     )
 
 
+# ============================================================
+# SEEN TITLES
+# ============================================================
 # ============================================================
 # SEEN TITLES
 # ============================================================
