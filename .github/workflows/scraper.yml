@@ -6,12 +6,12 @@ on:
   schedule:
     - cron: "*/5 * * * *"
 
-permissions:
-  contents: write
-
 concurrency:
   group: binged-telegram
   cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
 
@@ -19,15 +19,15 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
 
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
@@ -36,7 +36,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Binged Telegram Tracker
+      - name: Restore Tracker State
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            seen_titles.json
+            telegram_offset.json
+          key: binged-state-${{ github.run_id }}
+          restore-keys: |
+            binged-state-
+
+      - name: Run Binged Telegram Bot
         env:
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -44,21 +54,11 @@ jobs:
         run: |
           python main.py
 
-      - name: Save Seen Titles
-        if: success()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          if [ -f seen_titles.json ]; then
-            git add seen_titles.json
-
-            if ! git diff --cached --quiet; then
-              git commit -m "Update Binged seen titles"
-              git push
-            else
-              echo "No seen-title changes."
-            fi
-          else
-            echo "No seen_titles.json created."
-          fi
+      - name: Save Tracker State
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            seen_titles.json
+            telegram_offset.json
+          key: binged-state-${{ github.run_id }}
