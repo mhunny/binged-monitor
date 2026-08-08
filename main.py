@@ -34,10 +34,6 @@ SEEN_FILE = "seen_titles.json"
 
 COMMAND_MAX_AGE_SECONDS = 10 * 60
 
-# Avoid excessive ScraperAPI usage.
-# Only use detail-page lookup when listing platform is missing.
-MAX_DETAIL_LOOKUPS = 30
-
 
 # ============================================================
 # TELEGRAM API
@@ -92,63 +88,112 @@ def send_message(
 
 
 # ============================================================
-# BINGED FETCH
+# SCRAPERAPI
 # ============================================================
 
-def fetch_url(url):
+def fetch_url(url, attempts=3):
 
     if not SCRAPER_API_KEY:
         raise RuntimeError(
             "SCRAPER_API_KEY secret is missing."
         )
 
-    response = requests.get(
-        "https://api.scraperapi.com/",
-        params={
-            "api_key": SCRAPER_API_KEY,
-            "url": url,
-            "render": "true"
-        },
-        timeout=120
-    )
+    last_error = None
 
-    print(
-        f"ScraperAPI status: "
-        f"{response.status_code}"
-    )
+    for attempt in range(1, attempts + 1):
 
-    print(
-        f"HTML length: "
-        f"{len(response.text)}"
-    )
-
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"ScraperAPI returned HTTP "
-            f"{response.status_code}"
+        print(
+            f"ScraperAPI request "
+            f"{attempt}/{attempts}"
         )
 
-    html = response.text
+        try:
 
-    blocked = [
-        "access denied",
-        "<title>forbidden</title>",
-        "verify you are human",
-        "checking your browser",
-        "just a moment"
-    ]
+            params = {
+                "api_key": SCRAPER_API_KEY,
+                "url": url,
+                "render": "true"
+            }
 
-    first_part = html[:20000].lower()
+            # Use premium proxy only on final retry.
+            if attempt == attempts:
+                params["premium"] = "true"
 
-    for phrase in blocked:
+                print(
+                    "Using premium proxy on final retry..."
+                )
 
-        if phrase in first_part:
-            raise RuntimeError(
-                f"Binged returned blocked page: "
-                f"{phrase}"
+            response = requests.get(
+                "https://api.scraperapi.com/",
+                params=params,
+                timeout=180
             )
 
-    return html
+            print(
+                f"ScraperAPI HTTP status: "
+                f"{response.status_code}"
+            )
+
+            print(
+                f"Returned HTML length: "
+                f"{len(response.text)}"
+            )
+
+            if response.status_code == 200:
+
+                html = response.text
+
+                first_part = html[:20000].lower()
+
+                blocked_phrases = [
+                    "access denied",
+                    "<title>forbidden</title>",
+                    "verify you are human",
+                    "checking your browser",
+                    "just a moment"
+                ]
+
+                for phrase in blocked_phrases:
+
+                    if phrase in first_part:
+                        raise RuntimeError(
+                            f"Binged returned blocked/"
+                            f"verification page: {phrase}"
+                        )
+
+                return html
+
+            last_error = (
+                f"ScraperAPI returned HTTP "
+                f"{response.status_code}"
+            )
+
+        except Exception as e:
+
+            last_error = str(e)
+
+            print(
+                f"ScraperAPI attempt "
+                f"{attempt} failed: {e}"
+            )
+
+        if attempt < attempts:
+
+            wait_seconds = attempt * 10
+
+            print(
+                f"Waiting {wait_seconds} seconds "
+                f"before retry..."
+            )
+
+            time.sleep(
+                wait_seconds
+            )
+
+    raise RuntimeError(
+        last_error
+        or "ScraperAPI request failed."
+    )
 
 
 def fetch_binged():
@@ -156,6 +201,8 @@ def fetch_binged():
     print(
         "Fetching filtered Binged page..."
     )
+
+    print(BINGED_URL)
 
     return fetch_url(
         BINGED_URL
@@ -314,11 +361,14 @@ def parse_date(value):
         return None
 
     try:
+
         return datetime.strptime(
             match.group(0),
             "%d %b %Y"
         )
+
     except ValueError:
+
         return None
 
 
@@ -331,6 +381,7 @@ def find_rating(text):
             text,
             re.IGNORECASE
         ):
+
             return rating
 
     return None
@@ -347,6 +398,7 @@ def find_date(text):
     )
 
     if match:
+
         return match.group(0)
 
     return None
@@ -359,6 +411,7 @@ def find_type(text):
         text,
         re.IGNORECASE
     ):
+
         return "TV Show"
 
     if re.search(
@@ -366,6 +419,7 @@ def find_type(text):
         text,
         re.IGNORECASE
     ):
+
         return "Film"
 
     return None
@@ -384,14 +438,16 @@ def find_language(text):
         ):
 
             if language not in found:
-                found.append(language)
+
+                found.append(
+                    language
+                )
 
     return ", ".join(found)
 
 
 def find_platform(text):
 
-    # Long names first.
     platforms = sorted(
         PLATFORMS,
         key=len,
@@ -405,6 +461,7 @@ def find_platform(text):
             text,
             re.IGNORECASE
         ):
+
             return platform
 
     return None
@@ -423,9 +480,54 @@ def find_genres(text):
         ):
 
             if genre not in found:
-                found.append(genre)
+
+                found.append(
+                    genre
+                )
 
     return ", ".join(found)
+
+
+# ============================================================
+# NORMALIZE PLATFORM
+# ============================================================
+
+def normalize_platform(platform):
+
+    if not platform:
+        return None
+
+    lower = platform.lower()
+
+    if lower in [
+        "hotstar",
+        "jio hotstar",
+        "jiohotstar",
+        "disney+ hotstar"
+    ]:
+
+        return "Jio Hotstar"
+
+    if lower in [
+        "amazon",
+        "amazon prime video"
+    ]:
+
+        return "Prime Video"
+
+    if lower == "zee5":
+
+        return "ZEE5"
+
+    if lower == "sony liv":
+
+        return "Sony LIV"
+
+    if lower == "aha video":
+
+        return "aha"
+
+    return platform
 
 
 # ============================================================
@@ -434,7 +536,9 @@ def find_genres(text):
 
 def clean_title(title):
 
-    title = clean_text(title)
+    title = clean_text(
+        title
+    )
 
     if not title:
         return ""
@@ -461,17 +565,20 @@ def clean_title(title):
         flags=re.IGNORECASE
     )
 
-    return clean_text(title)
+    return clean_text(
+        title
+    )
 
 
 # ============================================================
-# PLATFORM FROM HTML
+# PLATFORM FROM LISTING CARD
 # ============================================================
 
-def extract_platform_from_element(element):
+def extract_platform_from_element(
+    element
+):
 
-    # Image alt/title is important because Binged uses
-    # platform-logo images.
+    # 1. Images / logos.
     for img in element.find_all("img"):
 
         values = [
@@ -483,17 +590,24 @@ def extract_platform_from_element(element):
 
         for value in values:
 
-            value = clean_text(value)
+            value = clean_text(
+                value
+            )
 
             if not value:
                 continue
 
-            platform = find_platform(value)
+            platform = find_platform(
+                value
+            )
 
             if platform:
-                return platform
 
-    # Links and labels.
+                return normalize_platform(
+                    platform
+                )
+
+    # 2. Links / labels.
     for tag in element.find_all(
         ["a", "span", "div"]
     ):
@@ -509,35 +623,54 @@ def extract_platform_from_element(element):
 
         for value in values:
 
-            value = clean_text(value)
+            value = clean_text(
+                value
+            )
 
             if not value:
                 continue
 
-            platform = find_platform(value)
+            platform = find_platform(
+                value
+            )
 
             if platform:
-                return platform
 
-    # Any HTML attribute.
+                return normalize_platform(
+                    platform
+                )
+
+    # 3. HTML attributes.
     for tag in element.find_all(True):
 
         for value in tag.attrs.values():
 
-            if isinstance(value, list):
+            if isinstance(
+                value,
+                list
+            ):
 
                 value = " ".join(
                     str(x)
                     for x in value
                 )
 
-            if not isinstance(value, str):
+            if not isinstance(
+                value,
+                str
+            ):
+
                 continue
 
-            platform = find_platform(value)
+            platform = find_platform(
+                value
+            )
 
             if platform:
-                return platform
+
+                return normalize_platform(
+                    platform
+                )
 
     return None
 
@@ -546,7 +679,9 @@ def extract_platform_from_element(element):
 # TITLE LINK
 # ============================================================
 
-def find_title_link(element):
+def find_title_link(
+    element
+):
 
     candidates = []
 
@@ -562,7 +697,9 @@ def find_title_link(element):
             )
         )
 
-        href = a.get("href")
+        href = a.get(
+            "href"
+        )
 
         if not raw_text or not href:
             continue
@@ -583,24 +720,28 @@ def find_title_link(element):
             x.lower()
             for x in RATINGS
         ]:
+
             continue
 
         if lower in [
             x.lower()
             for x in TYPE_VALUES
         ]:
+
             continue
 
         if lower in [
             x.lower()
             for x in LANGUAGES
         ]:
+
             continue
 
         if lower in [
             x.lower()
             for x in PLATFORMS
         ]:
+
             continue
 
         if lower in [
@@ -612,6 +753,7 @@ def find_title_link(element):
             "news",
             "ranked lists"
         ]:
+
             continue
 
         candidates.append(
@@ -622,6 +764,7 @@ def find_title_link(element):
         )
 
     if not candidates:
+
         return None, None
 
     # Prefer Binged content/detail URLs.
@@ -639,203 +782,14 @@ def find_title_link(element):
                 or "/web-series/" in href_lower
             )
         ):
+
             return title, href
 
     return candidates[0]
 
 
 # ============================================================
-# DETAIL PAGE PLATFORM
-# ============================================================
-
-def extract_platform_from_detail(
-    binged_link
-):
-
-    if not binged_link:
-        return None
-
-    try:
-
-        print(
-            f"Checking detail page for platform: "
-            f"{binged_link}"
-        )
-
-        html = fetch_url(
-            binged_link
-        )
-
-        soup = BeautifulSoup(
-            html,
-            "html.parser"
-        )
-
-        # ----------------------------------------------------
-        # 1. Page title.
-        #
-        # Example:
-        # Kamen Rider Gavv ... Watch on Jio Hotstar
-        # ----------------------------------------------------
-
-        page_title = clean_text(
-            soup.title.get_text(
-                " ",
-                strip=True
-            )
-            if soup.title
-            else ""
-        )
-
-        platform = find_platform(
-            page_title
-        )
-
-        if platform:
-            return normalize_platform(
-                platform
-            )
-
-        # ----------------------------------------------------
-        # 2. Look around streaming-date text.
-        # ----------------------------------------------------
-
-        full_text = clean_text(
-            soup.get_text(
-                " ",
-                strip=True
-            )
-        )
-
-        # Restrict search to the first part containing
-        # streaming information where possible.
-        positions = [
-            full_text.lower().find(
-                "streaming date"
-            ),
-            full_text.lower().find(
-                "streaming platform"
-            ),
-            full_text.lower().find(
-                "watch on"
-            )
-        ]
-
-        valid_positions = [
-            p for p in positions
-            if p >= 0
-        ]
-
-        if valid_positions:
-
-            start = min(
-                valid_positions
-            )
-
-            section = full_text[
-                start:start + 1200
-            ]
-
-            platform = find_platform(
-                section
-            )
-
-            if platform:
-                return normalize_platform(
-                    platform
-                )
-
-        # ----------------------------------------------------
-        # 3. Search links around the streaming date.
-        # ----------------------------------------------------
-
-        for a in soup.find_all(
-            "a",
-            href=True
-        ):
-
-            text = clean_text(
-                a.get_text(
-                    " ",
-                    strip=True
-                )
-            )
-
-            if not text:
-                continue
-
-            if (
-                "streaming" in text.lower()
-                or "watch" in text.lower()
-            ):
-
-                platform = find_platform(
-                    text
-                )
-
-                if platform:
-                    return normalize_platform(
-                        platform
-                    )
-
-            href = a.get(
-                "href",
-                ""
-            )
-
-            platform = find_platform(
-                href
-            )
-
-            if platform:
-                return normalize_platform(
-                    platform
-                )
-
-    except Exception as e:
-
-        print(
-            f"Detail platform lookup failed: {e}"
-        )
-
-    return None
-
-
-def normalize_platform(platform):
-
-    if not platform:
-        return None
-
-    lower = platform.lower()
-
-    if lower in [
-        "hotstar",
-        "jio hotstar",
-        "jiohotstar",
-        "disney+ hotstar"
-    ]:
-        return "Jio Hotstar"
-
-    if lower in [
-        "amazon",
-        "amazon prime video"
-    ]:
-        return "Prime Video"
-
-    if lower == "zee5":
-        return "ZEE5"
-
-    if lower == "sony liv":
-        return "Sony LIV"
-
-    if lower == "aha video":
-        return "aha"
-
-    return platform
-
-
-# ============================================================
-# PARSE CARDS
+# PARSE BINGED LIST
 # ============================================================
 
 def parse_cards(html):
@@ -864,7 +818,12 @@ def parse_cards(html):
     candidates = []
 
     for element in soup.find_all(
-        ["article", "div", "li", "tr"]
+        [
+            "article",
+            "div",
+            "li",
+            "tr"
+        ]
     ):
 
         text = clean_text(
@@ -880,10 +839,16 @@ def parse_cards(html):
         if len(text) > 2500:
             continue
 
-        if not date_pattern.search(text):
+        if not date_pattern.search(
+            text
+        ):
+
             continue
 
-        if not rating_pattern.search(text):
+        if not rating_pattern.search(
+            text
+        ):
+
             continue
 
         candidates.append(
@@ -893,11 +858,13 @@ def parse_cards(html):
             )
         )
 
+    # Smallest useful containers first.
     candidates.sort(
         key=lambda x: len(x[1])
     )
 
     cards = []
+
     used_titles = set()
 
     for element, text in candidates:
@@ -915,6 +882,7 @@ def parse_cards(html):
         )
 
         if not rating or not release_date:
+
             continue
 
         title, binged_link = find_title_link(
@@ -922,6 +890,7 @@ def parse_cards(html):
         )
 
         if not title:
+
             continue
 
         title = clean_title(
@@ -929,6 +898,7 @@ def parse_cards(html):
         )
 
         if not title:
+
             continue
 
         title_key = normal_key(
@@ -936,9 +906,11 @@ def parse_cards(html):
         )
 
         if not title_key:
+
             continue
 
         if title_key in used_titles:
+
             continue
 
         if title.lower() in [
@@ -948,16 +920,16 @@ def parse_cards(html):
             "search",
             "filters"
         ]:
+
             continue
+
+        # ----------------------------------------------------
+        # Metadata
+        # ----------------------------------------------------
 
         platform = extract_platform_from_element(
             element
         )
-
-        if platform:
-            platform = normalize_platform(
-                platform
-            )
 
         language = find_language(
             text
@@ -967,15 +939,25 @@ def parse_cards(html):
             text
         )
 
+        # ----------------------------------------------------
+        # Normalize Binged link.
+        # ----------------------------------------------------
+
         if binged_link:
 
-            if binged_link.startswith("/"):
+            if binged_link.startswith(
+                "/"
+            ):
+
                 binged_link = (
                     "https://www.binged.com"
                     + binged_link
                 )
 
-            elif binged_link.startswith("//"):
+            elif binged_link.startswith(
+                "//"
+            ):
+
                 binged_link = (
                     "https:"
                     + binged_link
@@ -984,6 +966,7 @@ def parse_cards(html):
             elif binged_link.startswith(
                 "http://"
             ):
+
                 binged_link = binged_link.replace(
                     "http://",
                     "https://",
@@ -991,6 +974,7 @@ def parse_cards(html):
                 )
 
         if not binged_link:
+
             binged_link = BINGED_URL
 
         date_object = parse_date(
@@ -1010,13 +994,13 @@ def parse_cards(html):
                 "type": media_type or "Not listed",
                 "genre": genres or "Not listed",
                 "language": language or "Not listed",
-                "platform": platform,
+                "platform": platform or "Not listed",
                 "binged_link": binged_link
             }
         )
 
     # ========================================================
-    # SORT NEWEST → OLDEST
+    # NEWEST → OLDEST
     # ========================================================
 
     cards.sort(
@@ -1028,58 +1012,15 @@ def parse_cards(html):
     )
 
     print(
-        f"Parsed release cards: {len(cards)}"
+        f"Parsed release cards: "
+        f"{len(cards)}"
     )
-
-    # ========================================================
-    # FILL MISSING PLATFORMS FROM DETAIL PAGES
-    # ========================================================
-
-    missing_platform_count = 0
-
-    for card in cards:
-
-        if card["platform"]:
-            continue
-
-        if (
-            missing_platform_count
-            >= MAX_DETAIL_LOOKUPS
-        ):
-            print(
-                "Detail lookup limit reached."
-            )
-            break
-
-        platform = extract_platform_from_detail(
-            card["binged_link"]
-        )
-
-        if platform:
-
-            card["platform"] = platform
-
-            print(
-                f"Platform found: "
-                f"{card['title']} → {platform}"
-            )
-
-        else:
-
-            card["platform"] = "Not listed"
-
-            print(
-                f"Platform not found: "
-                f"{card['title']}"
-            )
-
-        missing_platform_count += 1
 
     return cards
 
 
 # ============================================================
-# STREMIO LINKS
+# STREMIO
 # ============================================================
 
 def stremio_app_link(
@@ -1113,9 +1054,13 @@ def stremio_web_link(
 # TELEGRAM BUTTONS
 # ============================================================
 
-def make_keyboard(card):
+def make_keyboard(
+    card
+):
 
-    title = card["title"]
+    title = card[
+        "title"
+    ]
 
     return {
         "inline_keyboard": [
@@ -1141,23 +1086,25 @@ def make_keyboard(card):
 # TELEGRAM MESSAGE
 # ============================================================
 
-def make_message(card):
+def make_message(
+    card
+):
 
     app_link = stremio_app_link(
         card["title"]
     )
 
     return (
-        f"🎬 {card['title']}\n\n"
+        f"🎬 {card['title']}\n"
         f"⭐ Rating: {card['rating']}\n"
         f"📅 Release: {card['date']}\n"
         f"🎞 Type: {card['type']}\n"
         f"🎭 Genre: {card['genre']}\n"
-        f"🗣 Language: {card['language'] or 'Not listed'}\n"
-        f"📺 Platform: {card['platform'] or 'Not listed'}\n\n"
+        f"🗣 Language: {card['language']}\n"
+        f"📺 Platform: {card['platform']}\n\n"
         f"📱 Stremio App Link:\n"
         f"{app_link}\n\n"
-        f"Use the button below to open Stremio Web."
+        f"Use the button below for Stremio Web."
     )
 
 
@@ -1170,6 +1117,7 @@ def load_seen():
     if not os.path.exists(
         SEEN_FILE
     ):
+
         return set()
 
     try:
@@ -1189,6 +1137,7 @@ def load_seen():
         )
 
     except Exception:
+
         return set()
 
 
@@ -1232,7 +1181,8 @@ def get_latest_command():
     except Exception as e:
 
         print(
-            f"Telegram getUpdates error: {e}"
+            f"Telegram getUpdates error: "
+            f"{e}"
         )
 
         return None
@@ -1243,6 +1193,7 @@ def get_latest_command():
     )
 
     if not updates:
+
         return None
 
     latest_command = None
@@ -1258,10 +1209,13 @@ def get_latest_command():
         )
 
         if not message:
+
             continue
 
         text = (
-            message.get("text")
+            message.get(
+                "text"
+            )
             or ""
         ).strip()
 
@@ -1273,6 +1227,7 @@ def get_latest_command():
                 "/latest@"
             )
         ):
+
             continue
 
         message_date = message.get(
@@ -1284,6 +1239,7 @@ def get_latest_command():
             now - message_date
             > COMMAND_MAX_AGE_SECONDS
         ):
+
             continue
 
         latest_command = message
@@ -1292,7 +1248,7 @@ def get_latest_command():
 
 
 # ============================================================
-# /latest RESPONSE
+# /latest
 # ============================================================
 
 def handle_latest(
@@ -1353,13 +1309,14 @@ def handle_latest(
             chat_id,
             f"✅ Latest filtered list: "
             f"{len(cards)} title(s), "
-            f"sorted newest to oldest."
+            f"sorted newest → oldest."
         )
 
     except Exception as e:
 
         print(
-            f"/latest error: {e}"
+            f"/latest error: "
+            f"{e}"
         )
 
         send_message(
@@ -1370,7 +1327,7 @@ def handle_latest(
 
 
 # ============================================================
-# AUTOMATIC UPDATE
+# AUTOMATIC UPDATES
 # ============================================================
 
 def automatic_update():
@@ -1390,7 +1347,8 @@ def automatic_update():
     if not cards:
 
         print(
-            "No cards extracted."
+            "No cards extracted. "
+            "Automatic notification skipped."
         )
 
         return
@@ -1404,9 +1362,11 @@ def automatic_update():
         )
 
         if not title_key:
+
             continue
 
         if title_key in seen:
+
             continue
 
         print(
@@ -1473,21 +1433,24 @@ def run():
     )
 
     if not SCRAPER_API_KEY:
+
         raise RuntimeError(
             "SCRAPER_API_KEY secret is missing."
         )
 
     if not TELEGRAM_BOT_TOKEN:
+
         raise RuntimeError(
             "TELEGRAM_BOT_TOKEN secret is missing."
         )
 
     if not TELEGRAM_CHAT_ID:
+
         raise RuntimeError(
             "TELEGRAM_CHAT_ID secret is missing."
         )
 
-    # Check /latest first.
+    # Check for /latest first.
     command = get_latest_command()
 
     if command:
@@ -1503,4 +1466,5 @@ def run():
 
 
 if __name__ == "__main__":
+
     run()
