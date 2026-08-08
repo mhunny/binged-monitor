@@ -1,4 +1,15 @@
-env:
+name: Test Binged Through ScraperAPI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Test Binged Through ScraperAPI
+        env:
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
         run: |
           python - <<'PY'
@@ -25,20 +36,29 @@ env:
               params={
                   "api_key": api_key,
                   "url": target,
-                  "render": "true",
+                  "render": "true"
               },
               timeout=120
           )
 
           print("ScraperAPI HTTP status:", response.status_code)
           print("Returned content length:", len(response.text))
-          print(response.text[:1000])
+          print(response.text[:2000])
 
           if response.status_code != 200:
-              raise SystemExit("ScraperAPI could not retrieve Binged.")
+              raise SystemExit(
+                  f"ScraperAPI request failed: HTTP {response.status_code}"
+              )
 
-          if "Forbidden" in response.text[:5000]:
-              raise SystemExit("Binged still returned Forbidden through ScraperAPI.")
+          if "Forbidden" in response.text[:10000]:
+              raise SystemExit(
+                  "ScraperAPI reached Binged but Binged returned Forbidden."
+              )
+
+          if "Access Denied" in response.text[:10000]:
+              raise SystemExit(
+                  "ScraperAPI reached Binged but Binged returned Access Denied."
+              )
 
           print("SUCCESS: ScraperAPI retrieved Binged.")
           PY
